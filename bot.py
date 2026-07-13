@@ -2,6 +2,7 @@
 TELEGRAM USERBOT DENGAN GEMINI 3.1 FLASH-LITE AI - INDONESIA FOKUS
 Single file complete bot - ready untuk Termux
 IMPROVED: Gemini 3.1 Flash-Lite + Better response quality + Robust error handling
+TUNED: Short, natural, authentic responses (1-2 kalimat MAX)
 """
 
 import asyncio
@@ -94,50 +95,50 @@ OPENING_MESSAGES = [
     "Gaes ada update terbaru?",
 ]
 
-# System prompts - STRICT INDONESIA ONLY + NATURAL
+# System prompts - STRICT INDONESIA ONLY + SHORT & AUTHENTIC
 SYSTEM_PROMPTS = [
-    """Kamu adalah teman gaul muda di grup chat Telegram Indonesia. 
-WAJIB PENTING: HANYA balas dalam BAHASA INDONESIA yang casual, natural, dan spontan.
-Gaya: Seperti ngobrol santai dengan teman sendiri. Pakai bahasa gaul muda (bro, bang, wkwk, njir, anjir, dll).
-Respon: SINGKAT (1-3 kalimat max), langsung nyambung, paham konteks, ngga formal, pakai emoji sesekali.
-Jangan: Bahasa Inggris, formal, panjang-panjang, robot-robot, atau terkesan AI.
-Contoh baik: "Wkwk bener banget", "Njir kocak", "Haha bet, gue setuju", "Iyah deh broo"
-Contoh buruk: "Ya, saya setuju", "Menurut saya itu benar", "Sangat menyenangkan".""",
+    """Kamu adalah teman santai di grup Telegram Indonesia.
+WAJIB: HANYA Bahasa Indonesia, balas SUPER SINGKAT (1-2 kalimat SAJA).
+Gaya: Seperti respon cepat teman biasa. Natural, jangan sok asik, jangan panjang.
+Bahasa: Gaul anak muda (bro, bang, wkwk, njir, gak, udah, sih, lah).
+PENTING: Balas langsung ke poin, jangan menjelaskan, jangan rambling.
+Contoh: "Haha iya", "Betul bro", "Njir kocak", "Bet deal"
+Jangan: Panjang, formal, menjelaskan, atau terkesan AI.""",
 
-    """Kamu adalah member aktif grup Telegram Indonesia yang fun, humor, dan natural.
-PENTING: Balas HANYA dalam Bahasa Indonesia gaul, jangan bahasa lain apapun.
-Suara: Santai, friendly, paham obrolan, bisa nyambung dengan baik.
-Panjang: Max 1-3 kalimat, singkat tapi meaningful, emotional intelligence tinggi.
-Gaya: Pakai bro/bang/mas, emoji, bahasa gaul muda (gak, udah, sih, lah, dong, dll).
-Hindari: English, formal, panjang, membosankan, terlihat AI.""",
+    """Kamu adalah member aktif grup yang santai dan authentic.
+HANYA Bahasa Indonesia, balas SINGKAT BANGET (max 1-2 kalimat).
+Tone: Real, casual, langsung nyambung tanpa perlu explain.
+Bahasa: Pakai istilah gaul (gue, lo, bro, bang, wkwk, njir, gak, udah).
+Jangan: Panjang, formal, sok tahu, atau terlihat AI.
+Balas cepat saja, ke poin, singkat.""",
 
-    """Kamu adalah teman baik di grup chat yang santai dan fun.
-WAJIB: Jawab HANYA Bahasa Indonesia yang casual dan gaul.
-Tone: Seurii teman curhat, humor, paham konteks, bisa bercanda.
-Format: 1-2 kalimat, langsung poin, energik tapi santai.
-Bahasa: Pakai istilah anak muda (wkwk, njir, bang, bro, gak, sih, lah).
-Jangan: Bahasa Inggris, formal berlebihan, terlalu serius, atau jelas-jelas AI.""",
+    """Kamu adalah teman grup yang santai.
+PENTING: HANYA Bahasa Indonesia, balas 1-2 kalimat SAJA.
+Natural: Seperti reply cepat WhatsApp teman, bukan essay.
+Gaya: Casual, paham konteks, langsung nyambung.
+Hindari: Panjang, formal, explanation, AI-sounding.
+Contoh: "Iya bang", "Wkwk true", "Bet", "Haha setuju".""",
 
-    """Sebagai anggota grup Telegram Indonesia yang akrab dan fun.
-PENTING: Respon HANYA dalam Bahasa Indonesia yang natural & casual.
-Gaya: Seperti teman dekat yang ngobrol santai, humor, paham mood.
-Panjang: Singkat banget (1-3 kalimat), tapi kena banget, nyambung sempurna.
-Bahasa: Gaul muda, pakai slang (wkwk, haha, njir, gue, lo, aja, udah, gak).
-Jangan: Bahasa selain Indonesia, AI-sounding, formal, atau panjang-panjang.""",
+    """Sebagai teman grup Indonesia.
+WAJIB: Hanya Bahasa Indonesia, SINGKAT (1-2 kalimat).
+Respon: Cepat & natural, jangan panjang-panjang.
+Authentic: Seperti teman biasa chat, bukan AI.
+Bahas: Pakai gaul muda (bro, bang, wkwk, sih, lah, gak).
+Jangan: Panjang, formal, menjelaskan, overkill.""",
 
-    """Kamu adalah teman gaul di grup Indonesia yang memahami humor lokal.
-WAJIB: Balas HANYA Bahasa Indonesia casual & fun, bukan bahasa lain.
-Karakter: Santai, funny, bisa ngerti konteks, bisa bercanda.
-Output: Maksimal 3 kalimat, langsung ke point, pakai emoji boleh.
-Bahasa: Indonesian gaul muda (bro, bang, wkwk, njir, sih, lah, dong, gak).
-Hindari: English, formal, panjang, AI-like, serius-serius.""",
+    """Kamu teman santai di grup Telegram.
+HANYA Bahasa Indonesia, SUPER SINGKAT (max 2 kalimat).
+Gaya: Natural, authentic, langsung to the point.
+Hindari: Panjang, formal, explanation yang tidak perlu.
+Pakai: Bahasa gaul (bro, bang, wkwk, njir, gue, lo, aja, gak).
+Contoh baik: "Wkwk iya", "Bet bro", "Haha true", "Njir kocak".""",
 ]
 
 # Fallback responses - HANYA untuk emergency (jika AI benar-benar error)
 FALLBACK_RESPONSES = [
-    "Wkwk iya", "Haha bener", "Bet broo", "Iyah deh", "Njir kocak", 
-    "Setuju banget", "Sama sih", "True true", "Hehe iya", "Okayy",
-    "Fix lah", "Noted", "Yup yup", "Amen", "Asli 😂", "Wkwk pas banget"
+    "Wkwk iya", "Haha bener", "Bet", "Iyah deh", "Njir", 
+    "Setuju", "Sama sih", "True", "Hehe iya", "Okayy",
+    "Fix", "Yup", "Amen", "Asli 😂", "Wkwk kocak", "Bener"
 ]
 
 # ==================== LANGUAGE DETECTION ====================
@@ -200,7 +201,7 @@ def print_banner():
     """Print bot banner"""
     print(f"\n{C.CYAN}{C.BOLD}" + "="*80)
     print(f"        🤖 TELEGRAM USERBOT DENGAN GEMINI 3.1 FLASH-LITE AI 🇮🇩")
-    print(f"        Indonesia-Only • 3-Chat Cycle • Natural Response • Strict Topic Filter")
+    print(f"        Indonesia-Only • 3-Chat Cycle • SHORT Natural Response • Strict Topic Filter")
     print(f"="*80 + f"{C.RESET}\n")
 
 def validate_config():
@@ -279,12 +280,13 @@ def get_message_topic_id(message):
         logger.debug(f"Error extracting topic_id: {e}")
         return None
 
-# ==================== AI ENGINE (IMPROVED) ====================
+# ==================== AI ENGINE (IMPROVED - SHORT RESPONSES) ====================
 
 def generate_ai_response(sender_name, user_text, context_messages=None, retry=0):
     """
-    Generate response dengan Gemini 3.1 Flash-Lite - STRICT INDONESIA + NATURAL
+    Generate response dengan Gemini 3.1 Flash-Lite - STRICT INDONESIA + SHORT & NATURAL
     Improved: Better prompts, retry logic, quality validation
+    TUNED: Responses harus singkat (1-2 kalimat), authentic, jangan panjang
     """
     if retry > 2:
         # After 3 retries, use fallback
@@ -293,57 +295,63 @@ def generate_ai_response(sender_name, user_text, context_messages=None, retry=0)
         return fallback, True
     
     try:
-        # Build context
+        # Build minimal context (2-3 messages only)
         context = ""
         if context_messages and len(context_messages) > 0:
-            # Take last 3-5 messages for context
-            recent = context_messages[-5:] if len(context_messages) >= 5 else context_messages
-            context = "Obrolan sebelumnya:\n"
+            # Take last 2-3 messages only untuk context yang minimal
+            recent = context_messages[-3:] if len(context_messages) >= 3 else context_messages
+            context = "Chat:\n"
             for msg in recent:
-                short_text = msg['text'][:100]
-                context += f"• {msg['sender']}: {short_text}\n"
+                short_text = msg['text'][:80]
+                context += f"{msg['sender']}: {short_text}\n"
             context += "\n"
         
         system_prompt = random.choice(SYSTEM_PROMPTS)
         
-        # Better templates untuk Gemini 3.1 Flash-Lite
+        # Minimal templates untuk SANGAT SINGKAT
         template = random.choice([
-            "{context}Sekarang {sender} berkata: {text}\nBales singkat dan casual:",
-            "{context}{sender}: {text}\nReply kamu (natural, singkat, 1-2 kalimat):",
-            "{context}Temen ngobrol:\n{sender}: {text}\nKamu: (respon santai 1-2 kalimat)",
-            "{context}Chat grup:\n{sender}: {text}\nBalas cepat seperti teman biasa:",
-            "{context}Terbaru:\n{sender}: {text}\nRespon kamu (casual & natural):",
+            "{context}Balas singkat: {sender} bilang: {text}\nReply (1-2 kalimat):",
+            "{context}{sender}: {text}\nBalas pendek (jangan panjang):",
+            "{context}Chat: {sender} - {text}\nReply kamu (2 kalimat max):",
+            "{context}{sender} berkata: {text}\nRespon cepat & singkat:",
         ])
         
-        prompt = template.format(context=context, sender=sender_name, text=user_text[:150])
+        prompt = template.format(context=context, sender=sender_name, text=user_text[:120])
         
-        # Use Gemini 3.1 Flash-Lite (optimized untuk speed + quality)
+        # Use Gemini 3.1 Flash-Lite
         response = ai_client.models.generate_content(
             model='gemini-3.1-flash-lite',
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                temperature=0.9,  # Natural responses
-                max_output_tokens=80,  # Room for natural responses
-                top_p=0.95,
-                top_k=40
+                temperature=0.85,  # Natural but consistent
+                max_output_tokens=50,  # KURANGI dari 80 → 50 untuk force singkat
+                top_p=0.9,
+                top_k=30
             )
         )
         
         if response and response.text:
             reply_text = response.text.strip()
             
-            # Cleanup formatting
+            # Aggressive cleanup
             reply_text = reply_text.replace('**', '').replace('__', '').replace('```', '')
             reply_text = reply_text.replace('"', '').replace("'", '')
-            reply_text = reply_text.replace('Balas:', '').replace('Reply:', '').strip()
+            reply_text = reply_text.replace('Balas:', '').replace('Reply:', '').replace('Respon:', '').strip()
             reply_text = ' '.join(reply_text.split())  # Remove extra spaces
             
             # Remove common AI prefixes
-            if reply_text.startswith('Kamu:') or reply_text.startswith('Respon:'):
+            if reply_text.startswith('Kamu:') or reply_text.startswith('Respon:') or reply_text.startswith('Chat:'):
                 reply_text = reply_text.split(':', 1)[1].strip()
             
             logger.debug(f"AI Response (raw): {reply_text[:80]}")
+            
+            # STRICT: Reject jika lebih dari 2 kalimat
+            sentence_count = reply_text.count('.') + reply_text.count('!') + reply_text.count('?')
+            if sentence_count > 2:
+                logger.warning(f"Response terlalu panjang ({sentence_count} kalimat), retrying...")
+                stats['ai_errors'] += 1
+                return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
             
             # Validate Indonesian
             if not detect_language(reply_text):
@@ -351,9 +359,9 @@ def generate_ai_response(sender_name, user_text, context_messages=None, retry=0)
                 stats['ai_errors'] += 1
                 return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
             
-            # Length validation
-            if len(reply_text) > 200:
-                reply_text = reply_text[:197] + "..."
+            # Length validation: max 120 chars (singkat!)
+            if len(reply_text) > 120:
+                reply_text = reply_text[:117] + "..."
             
             # Quality check: not too short, not empty
             if reply_text and len(reply_text.strip()) > 2:
@@ -656,7 +664,7 @@ async def main():
     logger.info("="*80)
     logger.info("BOT STARTING - INDONESIA FOKUS")
     logger.info(f"Target: {TARGET_GROUP} | Topic: #{TOPIC_ID}")
-    logger.info("Model: Gemini 3.1 Flash-Lite")
+    logger.info("Model: Gemini 3.1 Flash-Lite (SHORT RESPONSES)")
     logger.info("="*80)
     
     try:
@@ -665,9 +673,9 @@ async def main():
         
         logger.info("✅ Connected successfully!")
         print(f"{C.GREEN}✅ USERBOT ACTIVE - INDONESIA ONLY 🇮🇩{C.RESET}\n")
-        print(f"{C.CYAN}LOGIC: Tunggu 3 chat → Balas natural → Istirahat → Repeat{C.RESET}")
+        print(f"{C.CYAN}LOGIC: Tunggu 3 chat → Balas singkat natural → Istirahat → Repeat{C.RESET}")
         print(f"{C.CYAN}FILTER: Hanya dari topic #{TOPIC_ID} • Hanya Bahasa Indonesia{C.RESET}")
-        print(f"{C.CYAN}AI: Gemini 3.1 Flash-Lite dengan natural response{C.RESET}")
+        print(f"{C.CYAN}AI: Gemini 3.1 Flash-Lite - SHORT & AUTHENTIC responses (1-2 kalimat){C.RESET}")
         print(f"{C.CYAN}Press Ctrl+C to instant shutdown{C.RESET}\n")
         
         # Start background task
