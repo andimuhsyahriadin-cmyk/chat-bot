@@ -281,8 +281,8 @@ Semua aktivitas di-log ke `logs/userbot.log`:
 
 ```bash
 # Clone
-git clone https://github.com/adansaja721-arch/telegram-userbot-enhanced.git
-cd telegram-userbot-enhanced
+ https://github.com/andimuhsyahriadin-cmyk/chat-bot.git
+cd chat-bot
 
 # Setup
 pip install -r requirements.txt
