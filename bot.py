@@ -1,8 +1,7 @@
 """
 TELEGRAM USERBOT DENGAN GEMINI 3.1 FLASH-LITE AI - INDONESIA FOKUS
 Single file complete bot - ready untuk Termux
-IMPROVED: Gemini 3.1 Flash-Lite + Better response quality + Robust error handling
-TUNED: Short, natural, authentic responses (1-2 kalimat MAX)
+IMPROVED: Ultra SHORT responses (2-3 kata) + Self-initiated chat + Strict filtering
 """
 
 import asyncio
@@ -67,11 +66,13 @@ last_activity = datetime.now()
 should_exit = False
 is_processing = False
 last_cycle_time = datetime.now()
+last_self_chat_time = datetime.now()
 
 stats = {
     'messages_received': 0,
     'messages_replied': 0,
     'messages_skipped': 0,
+    'self_chats': 0,
     'cycles_completed': 0,
     'errors': 0,
     'ai_errors': 0,
@@ -81,74 +82,70 @@ stats = {
 # Skip keywords
 SKIP_KEYWORDS = ['admin', 'moderator', 'warning', '[bot]', 'report', 'spam', 'banned', 'kick', 'mute']
 
-# Opening messages - STRICT BAHASA INDONESIA
+# Ultra short opening messages (2-3 kata) - STRICT BAHASA INDONESIA
 OPENING_MESSAGES = [
-    "Woi pada ngapain nih? Sepi banget",
-    "Gimana kabar kalian semua bro?",
-    "Ada yang seru nggak hari ini?",
-    "Anjir sepi amat, gas lah ngobrol",
-    "Ayo dong lanjut obrolan",
-    "Siapa ada ide obrolan asik?",
-    "Apa yang mau dibicarain hari ini?",
-    "Gas lanjut cerita bro",
-    "Wkwk sepi nih, temen?",
-    "Gaes ada update terbaru?",
+    "Woi sepi banget",
+    "Gimana kabar bro?",
+    "Ada yang seru?",
+    "Gas ngobrol",
+    "Ayo dong lanjut",
+    "Siapa punya ide?",
+    "Cerita donk temen",
+    "Gas lah bro",
+    "Wkwk sepi nih",
+    "Update donk gaes",
+    "Apa kabar semua?",
+    "Ada berita gak?",
 ]
 
-# System prompts - STRICT INDONESIA ONLY + SHORT & AUTHENTIC
+# Ultra short responses (2-3 kata SAJA!)
+ULTRA_SHORT_RESPONSES = [
+    "Haha iya", "Wkwk bener", "Bet bro", "Iyah deh", "Njir kocak",
+    "Setuju banget", "Sama sih", "True true", "Hehe iya", "Okayy",
+    "Fix lah", "Yup yup", "Amen", "Asli kocak", "Wkwk pas", "Bener bro",
+    "Haha ngakak", "Wkwk iya", "Gila banget", "Gokil bro", "Njir parah",
+    "Anjirrr", "Aduh bro", "Parah ini", "Keren banget", "Srek wkwk",
+]
+
+# System prompts - FORCE ULTRA SHORT (2-3 KATA)
 SYSTEM_PROMPTS = [
-    """Kamu adalah teman santai di grup Telegram Indonesia.
-WAJIB: HANYA Bahasa Indonesia, balas SUPER SINGKAT (1-2 kalimat SAJA).
-Gaya: Seperti respon cepat teman biasa. Natural, jangan sok asik, jangan panjang.
-Bahasa: Gaul anak muda (bro, bang, wkwk, njir, gak, udah, sih, lah).
-PENTING: Balas langsung ke poin, jangan menjelaskan, jangan rambling.
-Contoh: "Haha iya", "Betul bro", "Njir kocak", "Bet deal"
-Jangan: Panjang, formal, menjelaskan, atau terkesan AI.""",
+    """Kamu adalah teman grup Indonesia yang sangat santai.
+WAJIB: HANYA Bahasa Indonesia, balas ULTRA SINGKAT (2-3 KATA SAJA).
+Gaya: Seperti respon cepat WhatsApp, super natural, jangan panjang.
+Bahasa: Gaul padat (bro, bang, wkwk, njir, bet, iya, bener, yup).
+PENTING: Maksimal 2-3 kata, langsung poin, no explanation, authentic.
+Contoh BAIK: "Haha iya", "Bet bro", "Wkwk kocak", "Iyah deh"
+Contoh BURUK: "Saya setuju", "Itu benar", "Sangat lucu", "Menurut saya".""",
 
-    """Kamu adalah member aktif grup yang santai dan authentic.
-HANYA Bahasa Indonesia, balas SINGKAT BANGET (max 1-2 kalimat).
-Tone: Real, casual, langsung nyambung tanpa perlu explain.
-Bahasa: Pakai istilah gaul (gue, lo, bro, bang, wkwk, njir, gak, udah).
-Jangan: Panjang, formal, sok tahu, atau terlihat AI.
-Balas cepat saja, ke poin, singkat.""",
+    """Kamu member grup yang super chill.
+HANYA Bahasa Indonesia, MAKSIMAL 3 KATA.
+Style: Pendek, natural, casual, jangan formal sama sekali.
+Kata: Pakai slang (bro, bang, iya, bener, wkwk, njir, gak, bet).
+WAJIB: 2-3 kata saja, langsung, authentic, no AI-sounding.""",
 
-    """Kamu adalah teman grup yang santai.
-PENTING: HANYA Bahasa Indonesia, balas 1-2 kalimat SAJA.
-Natural: Seperti reply cepat WhatsApp teman, bukan essay.
-Gaya: Casual, paham konteks, langsung nyambung.
-Hindari: Panjang, formal, explanation, AI-sounding.
-Contoh: "Iya bang", "Wkwk true", "Bet", "Haha setuju".""",
+    """Teman grup Indonesia yang santai banget.
+PENTING: HANYA Bahasa Indonesia, 2-3 KATA MAKSIMAL.
+Natural: Seperti chat WhatsApp biasa temen, super singkat.
+Gaya: Casual, paham konteks, authentic, jangan panjang.
+Hindari: Formal, panjang, explanation, AI-like.""",
 
-    """Sebagai teman grup Indonesia.
-WAJIB: Hanya Bahasa Indonesia, SINGKAT (1-2 kalimat).
-Respon: Cepat & natural, jangan panjang-panjang.
-Authentic: Seperti teman biasa chat, bukan AI.
-Bahas: Pakai gaul muda (bro, bang, wkwk, sih, lah, gak).
-Jangan: Panjang, formal, menjelaskan, overkill.""",
+    """Member aktif grup yang natural.
+HANYA Bahasa Indonesia, SUPER SINGKAT (max 3 kata).
+Respon: Cepat, natural, authentic, langsung to the point.
+Bahasa: Gaul muda (bro, bang, iya, wkwk, bet, njir, amen).
+Jangan: Panjang, formal, explanation, terlihat AI.""",
 
-    """Kamu teman santai di grup Telegram.
-HANYA Bahasa Indonesia, SUPER SINGKAT (max 2 kalimat).
-Gaya: Natural, authentic, langsung to the point.
-Hindari: Panjang, formal, explanation yang tidak perlu.
-Pakai: Bahasa gaul (bro, bang, wkwk, njir, gue, lo, aja, gak).
-Contoh baik: "Wkwk iya", "Bet bro", "Haha true", "Njir kocak".""",
-]
-
-# Fallback responses - HANYA untuk emergency (jika AI benar-benar error)
-FALLBACK_RESPONSES = [
-    "Wkwk iya", "Haha bener", "Bet", "Iyah deh", "Njir", 
-    "Setuju", "Sama sih", "True", "Hehe iya", "Okayy",
-    "Fix", "Yup", "Amen", "Asli 😂", "Wkwk kocak", "Bener"
+    """Teman santai di grup.
+WAJIB: Bahasa Indonesia, 2-3 KATA SAJA.
+Gaya: Super natural, authentic, casual, jangan overthink.
+Contoh: "Haha iya", "Wkwk bener", "Bet", "Iyah", "Njir"
+Jangan: Panjang, formal, AI-sounding, explanation.""",
 ]
 
 # ==================== LANGUAGE DETECTION ====================
 
 def detect_language(text):
-    """
-    Detect if text is Indonesian (improved accuracy)
-    Returns: True if Indonesian, False otherwise
-    """
-    # Indonesian keywords & common words
+    """Detect if text is Indonesian"""
     indonesian_words = [
         'apa', 'siapa', 'dimana', 'kapan', 'bagaimana', 'kenapa', 'berapa',
         'ya', 'yah', 'yaudah', 'lah', 'dong', 'sih', 'kali', 'nih', 'tuh',
@@ -164,34 +161,17 @@ def detect_language(text):
     text_lower = text.lower()
     words = text_lower.split()
     
-    # Count Indonesian words
     indo_count = sum(1 for word in words if any(indo_word in word.lower() for indo_word in indonesian_words))
     
-    # If > 25% Indonesian words, likely Indonesian (lowered threshold)
     if len(words) > 0 and indo_count / len(words) > 0.25:
         return True
     
-    # Check for Arabic/Persian script
-    if any('\u0600' <= c <= '\u06FF' for c in text):
+    if any('\u0600' <= c <= '\u06FF' for c in text) or any('\u0400' <= c <= '\u04FF' for c in text):
         return False
-    
-    # Check for Cyrillic (Russian, etc)
-    if any('\u0400' <= c <= '\u04FF' for c in text):
+    if any('\u4E00' <= c <= '\u9FFF' for c in text) or any('\u3040' <= c <= '\u309F' for c in text):
         return False
-    
-    # Check for Chinese/Japanese/Korean
-    if any('\u4E00' <= c <= '\u9FFF' for c in text):  # Chinese
+    if any('\uAC00' <= c <= '\uD7AF' for c in text):
         return False
-    if any('\u3040' <= c <= '\u309F' for c in text):  # Japanese Hiragana
-        return False
-    if any('\u3400' <= c <= '\u4DBF' for c in text):  # CJK Extension A
-        return False
-    if any('\uAC00' <= c <= '\uD7AF' for c in text):  # Korean Hangul
-        return False
-    
-    # If mostly Latin and reasonable length, assume Indonesian
-    if len(words) >= 1:
-        return True
     
     return True
 
@@ -201,7 +181,7 @@ def print_banner():
     """Print bot banner"""
     print(f"\n{C.CYAN}{C.BOLD}" + "="*80)
     print(f"        🤖 TELEGRAM USERBOT DENGAN GEMINI 3.1 FLASH-LITE AI 🇮🇩")
-    print(f"        Indonesia-Only • 3-Chat Cycle • SHORT Natural Response • Strict Topic Filter")
+    print(f"        ULTRA SHORT (2-3 KATA) • Self-Chat • Indonesia-Only • Strict Filter")
     print(f"="*80 + f"{C.RESET}\n")
 
 def validate_config():
@@ -222,6 +202,10 @@ def should_skip_keywords(text):
         if keyword.lower() in text_lower:
             return True
     return False
+
+def count_words(text):
+    """Count words in text"""
+    return len(text.split())
 
 def get_uptime():
     """Get uptime"""
@@ -245,6 +229,7 @@ def print_stats():
     print(f"{C.GREEN}⏱️  Uptime:{C.RESET} {uptime}")
     print(f"{C.GREEN}📨 Messages Received:{C.RESET} {received}")
     print(f"{C.GREEN}✅ Messages Replied:{C.RESET} {replied}")
+    print(f"{C.GREEN}💬 Self Chats:{C.RESET} {stats['self_chats']}")
     print(f"{C.GREEN}🚫 Messages Skipped:{C.RESET} {skipped}")
     print(f"{C.GREEN}⏸️  Reply Rate:{C.RESET} {rate:.1f}%")
     print(f"{C.GREEN}🔄 Cycles Completed:{C.RESET} {stats['cycles_completed']}")
@@ -255,22 +240,14 @@ def print_stats():
 # ==================== TOPIC ID DETECTION ====================
 
 def get_message_topic_id(message):
-    """
-    Extract topic ID from message correctly
-    - For replies: use reply_to_top_id
-    - For original messages in topic: use topic_id
-    - Fallback to None if not in a topic
-    """
+    """Extract topic ID from message correctly"""
     try:
-        # For replies to messages in a topic
         if message.reply_to and hasattr(message.reply_to, 'reply_to_top_id'):
             return message.reply_to.reply_to_top_id
         
-        # For original messages in a topic
         if hasattr(message, 'topic_id') and message.topic_id:
             return message.topic_id
         
-        # Fallback: check forum_topic
         if hasattr(message, 'forum_topic') and message.forum_topic:
             return message.forum_topic
         
@@ -280,54 +257,47 @@ def get_message_topic_id(message):
         logger.debug(f"Error extracting topic_id: {e}")
         return None
 
-# ==================== AI ENGINE (IMPROVED - SHORT RESPONSES) ====================
+# ==================== AI ENGINE (ULTRA SHORT) ====================
 
 def generate_ai_response(sender_name, user_text, context_messages=None, retry=0):
     """
-    Generate response dengan Gemini 3.1 Flash-Lite - STRICT INDONESIA + SHORT & NATURAL
-    Improved: Better prompts, retry logic, quality validation
-    TUNED: Responses harus singkat (1-2 kalimat), authentic, jangan panjang
+    Generate ULTRA SHORT response (2-3 kata SAJA)
     """
     if retry > 2:
-        # After 3 retries, use fallback
-        logger.warning(f"Max retries reached for {sender_name}, using fallback")
-        fallback = random.choice(FALLBACK_RESPONSES)
+        fallback = random.choice(ULTRA_SHORT_RESPONSES)
         return fallback, True
     
     try:
-        # Build minimal context (2-3 messages only)
+        # Minimal context
         context = ""
         if context_messages and len(context_messages) > 0:
-            # Take last 2-3 messages only untuk context yang minimal
-            recent = context_messages[-3:] if len(context_messages) >= 3 else context_messages
+            recent = context_messages[-2:] if len(context_messages) >= 2 else context_messages
             context = "Chat:\n"
             for msg in recent:
-                short_text = msg['text'][:80]
+                short_text = msg['text'][:60]
                 context += f"{msg['sender']}: {short_text}\n"
             context += "\n"
         
         system_prompt = random.choice(SYSTEM_PROMPTS)
         
-        # Minimal templates untuk SANGAT SINGKAT
+        # Force ultra short templates
         template = random.choice([
-            "{context}Balas singkat: {sender} bilang: {text}\nReply (1-2 kalimat):",
-            "{context}{sender}: {text}\nBalas pendek (jangan panjang):",
-            "{context}Chat: {sender} - {text}\nReply kamu (2 kalimat max):",
-            "{context}{sender} berkata: {text}\nRespon cepat & singkat:",
+            "{context}{sender}: {text}\nBalas (2-3 kata max):",
+            "{context}Balas singkat:\n{sender}: {text}",
+            "{context}{sender} bilang: {text}\nReply cepat (3 kata):",
         ])
         
-        prompt = template.format(context=context, sender=sender_name, text=user_text[:120])
+        prompt = template.format(context=context, sender=sender_name, text=user_text[:100])
         
-        # Use Gemini 3.1 Flash-Lite
         response = ai_client.models.generate_content(
             model='gemini-3.1-flash-lite',
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                temperature=0.85,  # Natural but consistent
-                max_output_tokens=50,  # KURANGI dari 80 → 50 untuk force singkat
-                top_p=0.9,
-                top_k=30
+                temperature=0.8,
+                max_output_tokens=30,  # SUPER PENDEK (dari 50 → 30)
+                top_p=0.85,
+                top_k=20
             )
         )
         
@@ -336,20 +306,18 @@ def generate_ai_response(sender_name, user_text, context_messages=None, retry=0)
             
             # Aggressive cleanup
             reply_text = reply_text.replace('**', '').replace('__', '').replace('```', '')
-            reply_text = reply_text.replace('"', '').replace("'", '')
-            reply_text = reply_text.replace('Balas:', '').replace('Reply:', '').replace('Respon:', '').strip()
-            reply_text = ' '.join(reply_text.split())  # Remove extra spaces
+            reply_text = reply_text.replace('"', '').replace("'", '').replace('Balas:', '').strip()
+            reply_text = ' '.join(reply_text.split())
             
-            # Remove common AI prefixes
             if reply_text.startswith('Kamu:') or reply_text.startswith('Respon:') or reply_text.startswith('Chat:'):
                 reply_text = reply_text.split(':', 1)[1].strip()
             
-            logger.debug(f"AI Response (raw): {reply_text[:80]}")
+            logger.debug(f"AI Response: {reply_text[:60]}")
             
-            # STRICT: Reject jika lebih dari 2 kalimat
-            sentence_count = reply_text.count('.') + reply_text.count('!') + reply_text.count('?')
-            if sentence_count > 2:
-                logger.warning(f"Response terlalu panjang ({sentence_count} kalimat), retrying...")
+            # STRICT VALIDATION: max 5 kata (2-3 preferred)
+            word_count = count_words(reply_text)
+            if word_count > 5:
+                logger.warning(f"Response terlalu panjang ({word_count} kata), retrying...")
                 stats['ai_errors'] += 1
                 return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
             
@@ -359,16 +327,14 @@ def generate_ai_response(sender_name, user_text, context_messages=None, retry=0)
                 stats['ai_errors'] += 1
                 return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
             
-            # Length validation: max 120 chars (singkat!)
-            if len(reply_text) > 120:
-                reply_text = reply_text[:117] + "..."
+            # Length: max 50 chars (sangat singkat)
+            if len(reply_text) > 50:
+                reply_text = reply_text[:47] + "..."
             
-            # Quality check: not too short, not empty
-            if reply_text and len(reply_text.strip()) > 2:
-                logger.debug(f"✅ Valid response: {reply_text[:60]}")
+            if reply_text and len(reply_text.strip()) > 1:
+                logger.debug(f"✅ Valid: {reply_text}")
                 return reply_text, False
             else:
-                logger.warning(f"Response too short, retrying...")
                 stats['ai_errors'] += 1
                 return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
     
@@ -376,10 +342,9 @@ def generate_ai_response(sender_name, user_text, context_messages=None, retry=0)
         error_msg = str(e)
         logger.error(f"AI Error (attempt {retry + 1}): {error_msg[:100]}")
         
-        # Retry if it's a transient error
         if '500' in error_msg or '503' in error_msg or 'timeout' in error_msg.lower():
             logger.info(f"Transient error, retrying...")
-            time.sleep(2)  # Wait before retry
+            time.sleep(2)
             stats['ai_errors'] += 1
             return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
         
@@ -388,7 +353,7 @@ def generate_ai_response(sender_name, user_text, context_messages=None, retry=0)
     
     # Final fallback
     logger.warning(f"AI generation failed after retries, using fallback")
-    fallback = random.choice(FALLBACK_RESPONSES)
+    fallback = random.choice(ULTRA_SHORT_RESPONSES)
     return fallback, True
 
 # ==================== MESSAGE HANDLING ====================
@@ -399,18 +364,15 @@ async def handle_message(event):
     global message_queue, last_activity, is_processing, last_cycle_time
     
     try:
-        # Skip own messages
         if getattr(event.message, 'out', False):
             return
         
-        # STRICT: Only accept from INDONESIA TOPIC
         topic_id = get_message_topic_id(event.message)
         if topic_id != TOPIC_ID:
             logger.debug(f"Skipped: Wrong topic {topic_id} (should be {TOPIC_ID})")
             stats['messages_skipped'] += 1
             return
         
-        # Get sender
         sender = await event.get_sender()
         if not sender or sender.bot:
             stats['messages_skipped'] += 1
@@ -419,7 +381,6 @@ async def handle_message(event):
         sender_name = sender.first_name or "Unknown"
         user_text = event.message.text or ''
         
-        # Validate text
         if not user_text or len(user_text.strip()) < 3:
             stats['messages_skipped'] += 1
             return
@@ -427,14 +388,12 @@ async def handle_message(event):
         timestamp = datetime.now().strftime("%H:%M:%S")
         print(f"{C.YELLOW}[{timestamp}] {C.BOLD}{sender_name}{C.RESET}: {user_text}")
         
-        # Language check - STRICT INDONESIAN ONLY
         if not detect_language(user_text):
             print(f"   {C.RED}└─ 🚫 Skip (non-Indonesian){C.RESET}")
             logger.info(f"Skipped non-Indonesian from {sender_name}: {user_text[:50]}")
             stats['messages_skipped'] += 1
             return
         
-        # Keyword filtering
         if should_skip_keywords(user_text):
             print(f"   {C.CYAN}└─ ⏭️  Skip (keyword filter){C.RESET}")
             stats['messages_skipped'] += 1
@@ -443,7 +402,6 @@ async def handle_message(event):
         stats['messages_received'] += 1
         last_activity = datetime.now()
         
-        # Add to queue
         message_queue.append({
             'sender_id': sender.id,
             'sender_name': sender_name,
@@ -455,7 +413,6 @@ async def handle_message(event):
         queue_size = len(message_queue)
         print(f"   {C.MAGENTA}└─ 📦 Queue: {queue_size} messages (Topic: #{TOPIC_ID}){C.RESET}")
         
-        # TRIGGER: Jika queue >= 3
         current_time = datetime.now()
         time_since_last_cycle = (current_time - last_cycle_time).total_seconds()
         
@@ -469,7 +426,7 @@ async def handle_message(event):
 # ==================== REPLY CYCLE LOGIC ====================
 
 async def start_reply_cycle():
-    """Start 3-message reply cycle - INSTANT SEND"""
+    """Start 3-message reply cycle"""
     global is_processing, message_queue, last_activity, last_cycle_time
     
     if is_processing or len(message_queue) < 3:
@@ -479,14 +436,12 @@ async def start_reply_cycle():
     last_cycle_time = datetime.now()
     
     try:
-        # Pick 3 messages
         selected = message_queue[:3]
         
         print(f"\n{C.BOLD}{C.BLUE}{'='*80}{C.RESET}")
-        print(f"{C.BOLD}🤖 CYCLE: Balas 3 Messages (Indonesia Only)🇮🇩{C.RESET}")
+        print(f"{C.BOLD}🤖 CYCLE: Balas 3 Messages (ULTRA SHORT)🇮🇩{C.RESET}")
         print(f"{C.BOLD}{C.BLUE}{'='*80}{C.RESET}\n")
         
-        # Build context from entire queue
         context_for_ai = []
         for msg in message_queue:
             context_for_ai.append({
@@ -505,14 +460,12 @@ async def start_reply_cycle():
             event = msg['event']
             
             try:
-                # Generate response with retry logic
                 reply_text, is_fallback = generate_ai_response(sender_name, user_text, context_for_ai)
                 
                 delay = random.randint(DELAY_MIN, DELAY_MAX)
                 response_type = "FALLBACK" if is_fallback else "AI"
                 print(f"   {C.CYAN}└─ 🤔 Replying to {sender_name}... ({delay}s typing){C.RESET}")
                 
-                # Typing action - interruptible
                 try:
                     async with client.action(TARGET_GROUP, 'typing'):
                         for _ in range(delay):
@@ -525,7 +478,6 @@ async def start_reply_cycle():
                             break
                         await asyncio.sleep(1)
                 
-                # Send immediately
                 if not should_exit:
                     try:
                         await event.reply(reply_text)
@@ -540,8 +492,8 @@ async def start_reply_cycle():
                     print(f"   {C.GREEN}└─ ✅ [REPLY/{response_type}] {reply_text}{C.RESET}")
                     stats['messages_replied'] += 1
                     last_activity = datetime.now()
-                    logger.info(f"[INDONESIA] Reply to {sender_name}: {reply_text[:70]}")
-                
+                    logger.info(f"[INDONESIA] Reply to {sender_name}: {reply_text}")
+            
             except Exception as e:
                 logger.error(f"Error sending reply to {sender_name}: {e}")
                 stats['errors'] += 1
@@ -550,7 +502,6 @@ async def start_reply_cycle():
         if should_exit:
             return
         
-        # Remove dari queue
         for msg in selected:
             if msg in message_queue:
                 message_queue.remove(msg)
@@ -561,7 +512,6 @@ async def start_reply_cycle():
         
         stats['cycles_completed'] += 1
         
-        # REST PERIOD
         rest_duration = random.randint(REST_MIN, REST_MAX)
         minutes = rest_duration // 60
         seconds = rest_duration % 60
@@ -576,12 +526,10 @@ async def start_reply_cycle():
         if not should_exit:
             print(f"{C.GREEN}🌅 BOT WOKE UP{C.RESET}\n")
             
-            # Check queue
             if len(message_queue) >= 3:
                 print(f"{C.CYAN}New messages in queue, starting new cycle...{C.RESET}")
                 await start_reply_cycle()
             else:
-                # Check silence
                 time_silent = (datetime.now() - last_activity).total_seconds()
                 if time_silent > SILENCE:
                     print(f"{C.YELLOW}[SMART OPEN] Sepi {int(time_silent)}s, buka obrolan...{C.RESET}")
@@ -594,26 +542,28 @@ async def start_reply_cycle():
     finally:
         is_processing = False
 
-# ==================== SMART OPENING ====================
+# ==================== SMART OPENING + SELF CHAT ====================
 
 async def smart_open():
-    """Send smart opening message - INDONESIA ONLY"""
+    """Send ultra short opening message (2-3 kata)"""
     try:
         if should_exit:
             return
         
         msg = random.choice(OPENING_MESSAGES)
         await client.send_message(TARGET_GROUP, msg, reply_to=TOPIC_ID)
-        print(f"{C.GREEN}📢 [OPENING] {msg}{C.RESET}\n")
-        logger.info(f"[INDONESIA] Smart opening sent: {msg}")
+        print(f"{C.GREEN}📢 [SELF-CHAT] {msg}{C.RESET}\n")
+        logger.info(f"[SELF-CHAT] Sent: {msg}")
         
-        global last_activity
+        global last_activity, last_self_chat_time
         last_activity = datetime.now()
+        last_self_chat_time = datetime.now()
+        stats['self_chats'] += 1
     except Exception as e:
-        logger.error(f"Smart opening failed: {e}")
+        logger.error(f"Self chat failed: {e}")
 
 async def smart_opening_task():
-    """Background task untuk monitor silence"""
+    """Background task untuk monitor silence + self-chat"""
     while not should_exit:
         try:
             for _ in range(2):
@@ -628,7 +578,7 @@ async def smart_opening_task():
             if len(message_queue) >= 3 and not is_processing:
                 asyncio.create_task(start_reply_cycle())
             
-            # Check silence
+            # Check silence and maybe self-chat
             time_silent = (datetime.now() - last_activity).total_seconds()
             if time_silent > SILENCE and not is_processing and len(message_queue) == 0:
                 asyncio.create_task(smart_open())
@@ -636,7 +586,7 @@ async def smart_opening_task():
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.error(f"Smart opening task error: {e}")
+            logger.error(f"Task error: {e}")
 
 # ==================== SIGNAL HANDLING ====================
 
@@ -664,7 +614,7 @@ async def main():
     logger.info("="*80)
     logger.info("BOT STARTING - INDONESIA FOKUS")
     logger.info(f"Target: {TARGET_GROUP} | Topic: #{TOPIC_ID}")
-    logger.info("Model: Gemini 3.1 Flash-Lite (SHORT RESPONSES)")
+    logger.info("Model: Gemini 3.1 Flash-Lite (ULTRA SHORT 2-3 KATA)")
     logger.info("="*80)
     
     try:
@@ -673,15 +623,14 @@ async def main():
         
         logger.info("✅ Connected successfully!")
         print(f"{C.GREEN}✅ USERBOT ACTIVE - INDONESIA ONLY 🇮🇩{C.RESET}\n")
-        print(f"{C.CYAN}LOGIC: Tunggu 3 chat → Balas singkat natural → Istirahat → Repeat{C.RESET}")
+        print(f"{C.CYAN}LOGIC: Tunggu 3 chat → Balas ultra short → Istirahat → Repeat{C.RESET}")
         print(f"{C.CYAN}FILTER: Hanya dari topic #{TOPIC_ID} • Hanya Bahasa Indonesia{C.RESET}")
-        print(f"{C.CYAN}AI: Gemini 3.1 Flash-Lite - SHORT & AUTHENTIC responses (1-2 kalimat){C.RESET}")
+        print(f"{C.CYAN}AI: Gemini 3.1 Flash-Lite - ULTRA SHORT responses (2-3 kata){C.RESET}")
+        print(f"{C.CYAN}SELF-CHAT: Auto kirim pesan jika sepi 60+ detik{C.RESET}")
         print(f"{C.CYAN}Press Ctrl+C to instant shutdown{C.RESET}\n")
         
-        # Start background task
         smart_task = asyncio.create_task(smart_opening_task())
         
-        # Run
         await client.run_until_disconnected()
     
     except KeyboardInterrupt:
