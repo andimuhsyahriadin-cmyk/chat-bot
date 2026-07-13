@@ -1,8 +1,7 @@
 """
 TELEGRAM USERBOT DENGAN GEMINI 3.1 AI - INDONESIA FOKUS
 Single file complete bot - ready untuk Termux
-IMPROVED: Strict Indonesia-only + Topic filtering + Language detection
-FIX: Correct topic_id detection for original messages + improved message handling
+IMPROVED: Gemini 3.1 Pro + Better response quality + Robust error handling
 """
 
 import asyncio
@@ -11,6 +10,7 @@ import signal
 import sys
 import os
 import logging
+import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
@@ -73,6 +73,7 @@ stats = {
     'messages_skipped': 0,
     'cycles_completed': 0,
     'errors': 0,
+    'ai_errors': 0,
     'start_time': datetime.now()
 }
 
@@ -89,75 +90,88 @@ OPENING_MESSAGES = [
     "Siapa ada ide obrolan asik?",
     "Apa yang mau dibicarain hari ini?",
     "Gas lanjut cerita bro",
+    "Wkwk sepi nih, temen?",
+    "Gaes ada update terbaru?",
 ]
 
-# System prompts - STRICT INDONESIA ONLY
+# System prompts - STRICT INDONESIA ONLY + NATURAL
 SYSTEM_PROMPTS = [
-    """Kamu adalah teman gaul di grup chat Indonesia. 
-PENTING: HANYA balas dalam BAHASA INDONESIA yang casual dan natural. 
-Jangan gunakan bahasa lain apapun (English, Arab, dsb).
-Balas SINGKAT (1-2 kalimat), santai, natural, dan NYAMBUNG sempurna dengan obrolan.
-Jangan formal, jangan panjang-panjang, jangan terlalu serius.""",
-    
-    """Respond sebagai teman biasa di grup Indonesia yang santai.
-PENTING: Jawab HANYA dalam Bahasa Indonesia casual.
-Jangan berpindah ke bahasa lain meski ditanya dalam bahasa lain - tetap gunakan Bahasa Indonesia.
-Balas super singkat (1-2 kalimat), santai, langsung to the point.""",
-    
-    """Kamu adalah anggota grup Indonesia yang fun dan natural.
-PENTING: SELALU gunakan Bahasa Indonesia dalam semua reply.
-Balas pendek, casual, LANGSUNG NYAMBUNG dengan obrolan grup.
-Keep it real, jangan terlalu formal atau panjang.""",
-    
-    """Sebagai teman di grup, balas dengan santai dan natural.
-PENTING: Hanya gunakan Bahasa Indonesia, jangan bahasa lain.
-Balas singkat (1-2 kalimat), dengan energi tapi tidak berlebihan.
-Jangan formal atau membosankan.""",
-    
-    """Kamu adalah teman santai di grup Indonesia.
-PENTING: WAJIB gunakan Bahasa Indonesia dalam semua jawaban.
-Balas sangat singkat, natural, straightforward, dan nyambung topik.
-Jangan panjang, jangan formal, jangan bahasa lain.""",
+    """Kamu adalah teman gaul muda di grup chat Telegram Indonesia. 
+WAJIB PENTING: HANYA balas dalam BAHASA INDONESIA yang casual, natural, dan spontan.
+Gaya: Seperti ngobrol santai dengan teman sendiri. Pakai bahasa gaul muda (bro, bang, wkwk, njir, anjir, dll).
+Respon: SINGKAT (1-3 kalimat max), langsung nyambung, paham konteks, ngga formal, pakai emoji sesekali.
+Jangan: Bahasa Inggris, formal, panjang-panjang, robot-robot, atau terkesan AI.
+Contoh baik: "Wkwk bener banget", "Njir kocak", "Haha bet, gue setuju", "Iyah deh broo"
+Contoh buruk: "Ya, saya setuju", "Menurut saya itu benar", "Sangat menyenangkan".""",
+
+    """Kamu adalah member aktif grup Telegram Indonesia yang fun, humor, dan natural.
+PENTING: Balas HANYA dalam Bahasa Indonesia gaul, jangan bahasa lain apapun.
+Suara: Santai, friendly, paham obrolan, bisa nyambung dengan baik.
+Panjang: Max 1-3 kalimat, singkat tapi meaningful, emotional intelligence tinggi.
+Gaya: Pakai bro/bang/mas, emoji, bahasa gaul muda (gak, udah, sih, lah, dong, dll).
+Hindari: English, formal, panjang, membosankan, terlihat AI.""",
+
+    """Kamu adalah teman baik di grup chat yang santai dan fun.
+WAJIB: Jawab HANYA Bahasa Indonesia yang casual dan gaul.
+Tone: Seurii teman curhat, humor, paham konteks, bisa bercanda.
+Format: 1-2 kalimat, langsung poin, energik tapi santai.
+Bahasa: Pakai istilah anak muda (wkwk, njir, bang, bro, gak, sih, lah).
+Jangan: Bahasa Inggris, formal berlebihan, terlalu serius, atau jelas-jelas AI.""",
+
+    """Sebagai anggota grup Telegram Indonesia yang akrab dan fun.
+PENTING: Respon HANYA dalam Bahasa Indonesia yang natural & casual.
+Gaya: Seperti teman dekat yang ngobrol santai, humor, paham mood.
+Panjang: Singkat banget (1-3 kalimat), tapi kena banget, nyambung sempurna.
+Bahasa: Gaul muda, pakai slang (wkwk, haha, njir, gue, lo, aja, udah, gak).
+Jangan: Bahasa selain Indonesia, AI-sounding, formal, atau panjang-panjang.""",
+
+    """Kamu adalah teman gaul di grup Indonesia yang memahami humor lokal.
+WAJIB: Balas HANYA Bahasa Indonesia casual & fun, bukan bahasa lain.
+Karakter: Santai, funny, bisa ngerti konteks, bisa bercanda.
+Output: Maksimal 3 kalimat, langsung ke point, pakai emoji boleh.
+Bahasa: Indonesian gaul muda (bro, bang, wkwk, njir, sih, lah, dong, gak).
+Hindari: English, formal, panjang, AI-like, serius-serius.""",
 ]
 
-# Fallback responses - STRICT BAHASA INDONESIA
+# Fallback responses - HANYA untuk emergency (jika AI benar-benar error)
 FALLBACK_RESPONSES = [
-    "Wkwk setuju", "Haha iya", "Sama sih", "Hehe true", "Bet", "Okee", 
-    "Betul", "Fix", "Noted", "Yup", "Iyaa", "Haha bener", "Tul bro",
-    "Amen", "Iyah deh", "Okeee", "Setuju banget", "Ya ya ya"
+    "Wkwk iya", "Haha bener", "Bet broo", "Iyah deh", "Njir kocak", 
+    "Setuju banget", "Sama sih", "True true", "Hehe iya", "Okayy",
+    "Fix lah", "Noted", "Yup yup", "Amen", "Asli 😂", "Wkwk pas banget"
 ]
 
 # ==================== LANGUAGE DETECTION ====================
 
 def detect_language(text):
     """
-    Detect if text is Indonesian
+    Detect if text is Indonesian (improved accuracy)
     Returns: True if Indonesian, False otherwise
     """
-    # Indonesian keywords & patterns
+    # Indonesian keywords & common words
     indonesian_words = [
-        'apa', 'siapa', 'dimana', 'kapan', 'bagaimana', 'kenapa',
-        'ya', 'yah', 'yaudah', 'lah', 'dong', 'sih', 'kali', 'nih',
-        'ini', 'itu', 'saya', 'kamu', 'dia', 'kami', 'kalian',
-        'dan', 'atau', 'tapi', 'tapi', 'bukan', 'juga', 'pun',
-        'di', 'ke', 'dari', 'untuk', 'sama', 'ada', 'tidak', 'jadi',
-        'bro', 'mas', 'bang', 'kak', 'dek', 'om', 'mbak', 'pak',
-        'aja', 'udah', 'gak', 'ga', 'ngga', 'nggak', 'enggak',
-        'gimana', 'gini', 'gitu', 'cuman', 'kalo', 'kalau'
+        'apa', 'siapa', 'dimana', 'kapan', 'bagaimana', 'kenapa', 'berapa',
+        'ya', 'yah', 'yaudah', 'lah', 'dong', 'sih', 'kali', 'nih', 'tuh',
+        'ini', 'itu', 'saya', 'kamu', 'dia', 'kami', 'kalian', 'kita',
+        'dan', 'atau', 'tapi', 'bukan', 'juga', 'pun', 'kalau', 'kalo',
+        'di', 'ke', 'dari', 'untuk', 'sama', 'ada', 'tidak', 'jadi', 'dulu',
+        'bro', 'mas', 'bang', 'kak', 'dek', 'om', 'mbak', 'pak', 'ibu', 'ente',
+        'aja', 'udah', 'gak', 'ga', 'ngga', 'nggak', 'enggak', 'gakk',
+        'gimana', 'gini', 'gitu', 'cuman', 'wkwk', 'haha', 'hehe', 'njir',
+        'be', 'bet', 'lo', 'gue', 'elu', 'klo', 'yang', 'sih', 'kok', 'soal'
     ]
     
     text_lower = text.lower()
     words = text_lower.split()
     
     # Count Indonesian words
-    indo_count = sum(1 for word in words if any(indo_word in word for indo_word in indonesian_words))
+    indo_count = sum(1 for word in words if any(indo_word in word.lower() for indo_word in indonesian_words))
     
-    # If > 30% Indonesian words, likely Indonesian
-    if len(words) > 0 and indo_count / len(words) > 0.3:
+    # If > 25% Indonesian words, likely Indonesian (lowered threshold)
+    if len(words) > 0 and indo_count / len(words) > 0.25:
         return True
     
     # Check for Arabic/Persian script
-    if any('\u0600' <= c <= '\u06FF' for c in text):  # Arabic range
+    if any('\u0600' <= c <= '\u06FF' for c in text):
         return False
     
     # Check for Cyrillic (Russian, etc)
@@ -169,14 +183,15 @@ def detect_language(text):
         return False
     if any('\u3040' <= c <= '\u309F' for c in text):  # Japanese Hiragana
         return False
+    if any('\u3400' <= c <= '\u4DBF' for c in text):  # CJK Extension A
+        return False
     if any('\uAC00' <= c <= '\uD7AF' for c in text):  # Korean Hangul
         return False
     
-    # If no non-Latin characters and reasonable length, assume Indonesian
-    if len(words) >= 2 and not any('\u0100' <= c <= '\uFFFF' for c in text if c.isalpha()):
+    # If mostly Latin and reasonable length, assume Indonesian
+    if len(words) >= 1:
         return True
     
-    # Default to Indonesian for benefit of doubt
     return True
 
 # ==================== HELPER FUNCTIONS ====================
@@ -185,7 +200,7 @@ def print_banner():
     """Print bot banner"""
     print(f"\n{C.CYAN}{C.BOLD}" + "="*80)
     print(f"        🤖 TELEGRAM USERBOT DENGAN GEMINI 3.1 AI 🇮🇩")
-    print(f"        Indonesia-Only • 3-Chat Cycle • Instant Send • Strict Topic Filter")
+    print(f"        Indonesia-Only • 3-Chat Cycle • Natural Response • Strict Topic Filter")
     print(f"="*80 + f"{C.RESET}\n")
 
 def validate_config():
@@ -232,16 +247,17 @@ def print_stats():
     print(f"{C.GREEN}🚫 Messages Skipped:{C.RESET} {skipped}")
     print(f"{C.GREEN}⏸️  Reply Rate:{C.RESET} {rate:.1f}%")
     print(f"{C.GREEN}🔄 Cycles Completed:{C.RESET} {stats['cycles_completed']}")
-    print(f"{C.GREEN}⚠️  Errors:{C.RESET} {stats['errors']}")
+    print(f"{C.GREEN}🤖 AI Errors:{C.RESET} {stats['ai_errors']}")
+    print(f"{C.GREEN}⚠️  Total Errors:{C.RESET} {stats['errors']}")
     print(f"{C.BOLD}{C.CYAN}{'='*80}{C.RESET}\n")
 
-# ==================== TOPIC ID DETECTION (FIXED) ====================
+# ==================== TOPIC ID DETECTION ====================
 
 def get_message_topic_id(message):
     """
-    FIX: Extract topic ID from message correctly
+    Extract topic ID from message correctly
     - For replies: use reply_to_top_id
-    - For original messages in topic: use topics_id (Telethon 1.31+)
+    - For original messages in topic: use topic_id
     - Fallback to None if not in a topic
     """
     try:
@@ -249,85 +265,121 @@ def get_message_topic_id(message):
         if message.reply_to and hasattr(message.reply_to, 'reply_to_top_id'):
             return message.reply_to.reply_to_top_id
         
-        # For original messages in a topic (Telethon 1.31+)
+        # For original messages in a topic
         if hasattr(message, 'topic_id') and message.topic_id:
             return message.topic_id
         
-        # Fallback: check if message has forum_topic attribute
+        # Fallback: check forum_topic
         if hasattr(message, 'forum_topic') and message.forum_topic:
             return message.forum_topic
         
-        # Last resort: None (not in a topic)
         return None
     
     except Exception as e:
         logger.debug(f"Error extracting topic_id: {e}")
         return None
 
-# ==================== AI ENGINE ====================
+# ==================== AI ENGINE (IMPROVED) ====================
 
-def generate_ai_response(sender_name, user_text, context_messages=None):
-    """Generate response dengan Gemini 3.1 AI - STRICT INDONESIA"""
+def generate_ai_response(sender_name, user_text, context_messages=None, retry=0):
+    """
+    Generate response dengan Gemini 3.1 Pro - STRICT INDONESIA + NATURAL
+    Improved: Better prompts, retry logic, quality validation
+    """
+    if retry > 2:
+        # After 3 retries, use fallback
+        logger.warning(f"Max retries reached for {sender_name}, using fallback")
+        fallback = random.choice(FALLBACK_RESPONSES)
+        return fallback, True
+    
     try:
+        # Build context
         context = ""
         if context_messages and len(context_messages) > 0:
-            recent = context_messages[-4:]
-            context = "Konteks obrolan terakhir:\n"
+            # Take last 3-5 messages for context
+            recent = context_messages[-5:] if len(context_messages) >= 5 else context_messages
+            context = "Obrolan sebelumnya:\n"
             for msg in recent:
-                short_text = msg['text'][:80]
-                context += f"- {msg['sender']}: {short_text}\n"
+                short_text = msg['text'][:100]
+                context += f"• {msg['sender']}: {short_text}\n"
             context += "\n"
         
         system_prompt = random.choice(SYSTEM_PROMPTS)
         
-        # Templates - all in Indonesian
+        # Better templates untuk Gemini 3.1
         template = random.choice([
-            "{context}Balas singkat dan nyambung:\n{sender}: {text}",
-            "{context}{sender}: {text}\nBalas cepat (1-2 kalimat saja):",
-            "{context}Teman ngomong:\n{sender}: {text}\nReply kamu (singkat):",
-            "{context}Kasih response santai:\n{sender}: {text}",
+            "{context}Sekarang {sender} berkata: {text}\nBales singkat dan casual:",
+            "{context}{sender}: {text}\nReply kamu (natural, singkat, 1-2 kalimat):",
+            "{context}Temen ngobrol:\n{sender}: {text}\nKamu: (respon santai 1-2 kalimat)",
+            "{context}Chat grup:\n{sender}: {text}\nBalas cepat seperti teman biasa:",
+            "{context}Terbaru:\n{sender}: {text}\nRespon kamu (casual & natural):",
         ])
         
-        contents = template.format(context=context, sender=sender_name, text=user_text[:120])
+        prompt = template.format(context=context, sender=sender_name, text=user_text[:150])
         
+        # Use Gemini 3.1 Pro (or Flash as fallback)
         response = ai_client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=contents,
+            model='gemini-3.1-pro-latest',  # Primary: Pro
+            contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                temperature=0.8,
-                max_output_tokens=60,
-                top_p=0.9
+                temperature=0.9,  # Lebih tinggi untuk natural
+                max_output_tokens=80,  # Slightly more room for natural responses
+                top_p=0.95,
+                top_k=40
             )
         )
         
         if response and response.text:
             reply_text = response.text.strip()
             
-            # Cleanup
+            # Cleanup formatting
             reply_text = reply_text.replace('**', '').replace('__', '').replace('```', '')
             reply_text = reply_text.replace('"', '').replace("'", '')
-            reply_text = ' '.join(reply_text.split())
+            reply_text = reply_text.replace('Balas:', '').replace('Reply:', '').strip()
+            reply_text = ' '.join(reply_text.split())  # Remove extra spaces
+            
+            # Remove common AI prefixes
+            if reply_text.startswith('Kamu:') or reply_text.startswith('Respon:'):
+                reply_text = reply_text.split(':', 1)[1].strip()
+            
+            logger.debug(f"AI Response (raw): {reply_text[:80]}")
             
             # Validate Indonesian
             if not detect_language(reply_text):
-                logger.warning(f"AI generated non-Indonesian text, using fallback: {reply_text[:50]}")
-                stats['errors'] += 1
-                fallback = random.choice(FALLBACK_RESPONSES)
-                return fallback, True
+                logger.warning(f"Non-Indonesian detected, retrying...")
+                stats['ai_errors'] += 1
+                return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
             
-            # Length check
-            if len(reply_text) > 150:
-                reply_text = reply_text[:147] + "..."
+            # Length validation
+            if len(reply_text) > 200:
+                reply_text = reply_text[:197] + "..."
             
+            # Quality check: not too short, not empty
             if reply_text and len(reply_text.strip()) > 2:
+                logger.debug(f"✅ Valid response: {reply_text[:60]}")
                 return reply_text, False
+            else:
+                logger.warning(f"Response too short, retrying...")
+                stats['ai_errors'] += 1
+                return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
     
     except Exception as e:
-        logger.error(f"AI Error: {e}")
+        error_msg = str(e)
+        logger.error(f"AI Error (attempt {retry + 1}): {error_msg[:100]}")
+        
+        # Retry if it's a transient error
+        if '500' in error_msg or '503' in error_msg or 'timeout' in error_msg.lower():
+            logger.info(f"Transient error, retrying...")
+            time.sleep(2)  # Wait before retry
+            stats['ai_errors'] += 1
+            return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
+        
         stats['errors'] += 1
+        stats['ai_errors'] += 1
     
-    # Fallback - guaranteed Indonesian
+    # Final fallback
+    logger.warning(f"AI generation failed after retries, using fallback")
     fallback = random.choice(FALLBACK_RESPONSES)
     return fallback, True
 
@@ -343,7 +395,7 @@ async def handle_message(event):
         if getattr(event.message, 'out', False):
             return
         
-        # STRICT: Only accept from INDONESIA TOPIC (FIXED)
+        # STRICT: Only accept from INDONESIA TOPIC
         topic_id = get_message_topic_id(event.message)
         if topic_id != TOPIC_ID:
             logger.debug(f"Skipped: Wrong topic {topic_id} (should be {TOPIC_ID})")
@@ -426,7 +478,7 @@ async def start_reply_cycle():
         print(f"{C.BOLD}🤖 CYCLE: Balas 3 Messages (Indonesia Only)🇮🇩{C.RESET}")
         print(f"{C.BOLD}{C.BLUE}{'='*80}{C.RESET}\n")
         
-        # Build context
+        # Build context from entire queue
         context_for_ai = []
         for msg in message_queue:
             context_for_ai.append({
@@ -445,11 +497,12 @@ async def start_reply_cycle():
             event = msg['event']
             
             try:
-                # Generate response
+                # Generate response with retry logic
                 reply_text, is_fallback = generate_ai_response(sender_name, user_text, context_for_ai)
                 
                 delay = random.randint(DELAY_MIN, DELAY_MAX)
-                print(f"   {C.CYAN}└─ 🤔 Replying to {sender_name}... ({delay}s){C.RESET}")
+                response_type = "FALLBACK" if is_fallback else "AI"
+                print(f"   {C.CYAN}└─ 🤔 Replying to {sender_name}... ({delay}s typing){C.RESET}")
                 
                 # Typing action - interruptible
                 try:
@@ -469,19 +522,17 @@ async def start_reply_cycle():
                     try:
                         await event.reply(reply_text)
                     except Exception as send_error:
-                        logger.warning(f"Reply failed: {send_error}, trying fallback send...")
-                        # Fallback: send as message to topic
+                        logger.warning(f"Reply failed: {send_error}, trying fallback...")
                         try:
                             await client.send_message(TARGET_GROUP, reply_text, reply_to=TOPIC_ID)
                         except Exception as fallback_error:
-                            logger.error(f"Fallback send also failed: {fallback_error}")
+                            logger.error(f"Fallback send failed: {fallback_error}")
                             raise
                     
-                    response_type = "FALLBACK" if is_fallback else "AI"
                     print(f"   {C.GREEN}└─ ✅ [REPLY/{response_type}] {reply_text}{C.RESET}")
                     stats['messages_replied'] += 1
                     last_activity = datetime.now()
-                    logger.info(f"[INDONESIA] Reply to {sender_name}: {reply_text[:50]}")
+                    logger.info(f"[INDONESIA] Reply to {sender_name}: {reply_text[:70]}")
                 
             except Exception as e:
                 logger.error(f"Error sending reply to {sender_name}: {e}")
@@ -605,6 +656,7 @@ async def main():
     logger.info("="*80)
     logger.info("BOT STARTING - INDONESIA FOKUS")
     logger.info(f"Target: {TARGET_GROUP} | Topic: #{TOPIC_ID}")
+    logger.info("Model: Gemini 3.1 Pro Latest")
     logger.info("="*80)
     
     try:
@@ -613,8 +665,9 @@ async def main():
         
         logger.info("✅ Connected successfully!")
         print(f"{C.GREEN}✅ USERBOT ACTIVE - INDONESIA ONLY 🇮🇩{C.RESET}\n")
-        print(f"{C.CYAN}LOGIC: Tunggu 3 chat → Balas instant → Istirahat → Repeat{C.RESET}")
+        print(f"{C.CYAN}LOGIC: Tunggu 3 chat → Balas natural → Istirahat → Repeat{C.RESET}")
         print(f"{C.CYAN}FILTER: Hanya dari topic #{TOPIC_ID} • Hanya Bahasa Indonesia{C.RESET}")
+        print(f"{C.CYAN}AI: Gemini 3.1 Pro dengan natural response{C.RESET}")
         print(f"{C.CYAN}Press Ctrl+C to instant shutdown{C.RESET}\n")
         
         # Start background task
