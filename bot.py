@@ -1,7 +1,7 @@
 """
 TELEGRAM USERBOT DENGAN GEMINI 3.1 AI
 Single file complete bot - ready untuk Termux
-Chat tetap masuk saat istirahat + AI Generated Random Opening
+IMPROVED: Smart deep reply detection + Intelligent context-aware responses
 """
 
 import asyncio
@@ -78,6 +78,16 @@ stats = {
 # Skip keywords
 SKIP_KEYWORDS = ['admin', 'moderator', 'warning', '[bot]', 'report', 'spam', 'banned']
 
+# Opening messages
+OPENING_MESSAGES = [
+    "Woi pada ngapain nih? Sepi banget",
+    "Gimana kabar kalian semua bro?",
+    "Ada yang seru nggak hari ini?",
+    "Anjir sepi amat, gas lah ngobrol",
+    "Ayo dong lanjut obrolan",
+    "Siapa ada ide obrolan asik?",
+]
+
 # System prompts (variation untuk hindari deteksi bot)
 SYSTEM_PROMPTS = [
     "Kamu temen gaul. Balas pendek, santai, nyambung sama obrolan.",
@@ -90,9 +100,6 @@ SYSTEM_PROMPTS = [
 # Fallback responses
 FALLBACK_RESPONSES = ["Wkwk setuju", "Haha true", "Sama sih", "Hehe iya", "Bet", "Noted", "Okee"]
 
-# Opening prompt - AI akan generate opening yang random
-OPENING_PROMPT = "Generate 1 casual Indonesian greeting yang singkat (1 sentence max) untuk buka percakapan di grup. Harus terlihat seperti teman biasa yang lagi santai. Jangan formal. Contoh: 'Woi pada ngapain nih?', 'Ada yang seru nggak hari ini?'. Generate hanya 1 kalimat saja, tanpa penjelasan."
-
 # ==================== HELPER FUNCTIONS ====================
 
 def print_banner():
@@ -100,7 +107,6 @@ def print_banner():
     print(f"\n{C.CYAN}{C.BOLD}" + "="*80)
     print(f"        🤖 TELEGRAM USERBOT DENGAN GEMINI 3.1 AI 🤖")
     print(f"        Smart Reply • Intelligent Rest • Real-time Monitoring")
-    print(f"        💬 Chat Masuk Saat Istirahat • AI Generated Opening")
     print(f"="*80 + f"{C.RESET}\n")
 
 def validate_config():
@@ -122,9 +128,24 @@ def get_topic_id(message):
     return reply_to_top or getattr(message.reply_to, 'reply_to_msg_id', None)
 
 def is_deep_reply(message):
-    """Check if deep reply (reply to reply)"""
+    """
+    IMPROVED: Check if deep reply (reply to reply) dengan logic yang lebih akurat
+    Deep reply = pesan yang reply ke pesan lain (bukan top-level)
+    Logic:
+    1. Jika tidak ada reply_to → top-level (return False)
+    2. Jika reply_to ada, cek apakah itu reply to thread/topic → top-level (return False)
+    3. Jika reply to pesan spesifik (reply_to_msg_id ada) → deep reply (return True)
+    """
     if not message.reply_to:
         return False
+    
+    # Check if ini reply to thread/topic (reply_to_top_id)
+    reply_to_top = getattr(message.reply_to, 'reply_to_top_id', None)
+    if reply_to_top:
+        # Ada reply_to_top_id tapi bukan nested = top-level di thread
+        return False
+    
+    # Check if ini actual reply ke pesan lain
     reply_to_msg = getattr(message.reply_to, 'reply_to_msg_id', None)
     return reply_to_msg is not None
 
@@ -164,20 +185,31 @@ def print_stats():
 
 # ==================== AI ENGINE ====================
 
-def generate_ai_response(sender_name, user_text):
-    """Generate response menggunakan Gemini 3.1 AI"""
+def generate_ai_response(sender_name, user_text, context_messages=None):
+    """
+    IMPROVED: Generate response menggunakan Gemini 3.1 AI dengan context awareness
+    context_messages: List of recent messages untuk context yang lebih baik
+    """
     try:
+        # Build context dari recent messages
+        context = ""
+        if context_messages:
+            context = "Konteks obrolan terakhir:\n"
+            for msg in context_messages[-3:]:  # Last 3 messages
+                context += f"- {msg['sender']}: {msg['text']}\n"
+            context += "\n"
+        
         # Pick random system prompt dan template
         system_prompt = random.choice(SYSTEM_PROMPTS)
         template = random.choice([
-            "Balas gaul Indonesia sesuai konteks:\n{sender}: {text}",
-            "Respond in casual Indonesian:\n{sender}: {text}",
-            "Komentar santai:\n{sender}: {text}",
+            "{context}Balas gaul Indonesia sesuai konteks:\n{sender}: {text}",
+            "{context}Respond in casual Indonesian:\n{sender}: {text}",
+            "{context}Komentar santai:\n{sender}: {text}",
         ])
         
-        contents = template.format(sender=sender_name, text=user_text)
+        contents = template.format(context=context, sender=sender_name, text=user_text)
         
-        # Call Gemini 3.1 Flash Lite
+        # Call Gemini 3.1 Flash Lite dengan temperature tinggi untuk variasi
         response = ai_client.models.generate_content(
             model='gemini-3.1-flash-lite',
             contents=contents,
@@ -190,7 +222,7 @@ def generate_ai_response(sender_name, user_text):
         
         if response and response.text:
             reply_text = response.text.strip()
-            # Cleanup
+            # Cleanup markdown formatting
             reply_text = reply_text.replace('**', '').replace('__', '').replace('```', '')
             reply_text = ' '.join(reply_text.split())
             if len(reply_text) > 150:
@@ -205,53 +237,11 @@ def generate_ai_response(sender_name, user_text):
     fallback = random.choice(FALLBACK_RESPONSES)
     return fallback, True
 
-def generate_opening_message():
-    """Generate random opening message menggunakan AI (BENAR-BENAR RANDOM!)"""
-    try:
-        response = ai_client.models.generate_content(
-            model='gemini-3.1-flash-lite',
-            contents=OPENING_PROMPT,
-            config=types.GenerateContentConfig(
-                system_instruction="Kamu adalah teman yang santai di grup Telegram. Generate greeting yang natural.",
-                temperature=1.0,  # Max randomness untuk opening!
-                max_output_tokens=20
-            )
-        )
-        
-        if response and response.text:
-            opening_text = response.text.strip()
-            # Cleanup
-            opening_text = opening_text.replace('**', '').replace('__', '').replace('```', '')
-            opening_text = opening_text.replace('"', '').replace("'", '')
-            opening_text = ' '.join(opening_text.split())
-            
-            # Jika terlalu panjang, potong
-            if len(opening_text) > 80:
-                opening_text = opening_text[:77] + "..."
-            
-            return opening_text
-    
-    except Exception as e:
-        logger.error(f"AI Opening Error: {e}")
-        stats['errors'] += 1
-    
-    # Fallback generic opening
-    fallback_openings = [
-        "Apa kabar kalian?",
-        "Halo semua!",
-        "Ada yang bisa dibantu?",
-        "Gimana nih?",
-    ]
-    return random.choice(fallback_openings)
-
 # ==================== MESSAGE HANDLING ====================
 
 @client.on(events.NewMessage(chats=TARGET_GROUP))
 async def handle_message(event):
-    """
-    Handle incoming messages
-    ✅ CHAT TETAP MASUK SAAT ISTIRAHAT - REAL TIME DISPLAY!
-    """
+    """Handle incoming messages dengan improved logic"""
     global messages_buffer, last_activity, is_replying
     
     try:
@@ -275,7 +265,7 @@ async def handle_message(event):
         if not user_text or len(user_text.strip()) < 3:
             return
         
-        # ✅ DISPLAY MESSAGE (SEMUA CHAT DITAMPILKAN REAL-TIME!)
+        # Display message (SEMUA CHAT DITAMPILKAN!)
         timestamp = datetime.now().strftime("%H:%M:%S")
         print(f"{C.YELLOW}[{timestamp}] {C.BOLD}{sender_name}{C.RESET}: {user_text}")
         
@@ -313,14 +303,12 @@ async def handle_message(event):
 
 async def reply_sequence():
     """
-    Reply sequence:
+    Reply sequence dengan improved context awareness:
     1. Pilih random 1-3 messages dari buffer
     2. Reply dengan delay 30-45s random per reply
     3. Show typing indicator
     4. Rest 1:50-2:20
     5. Buka percakapan jika sepi
-    
-    PENTING: Chat tetap masuk ke buffer saat istirahat!
     """
     global is_replying, messages_buffer, last_activity
     
@@ -342,14 +330,22 @@ async def reply_sequence():
         print(f"{C.BOLD}🤖 REPLYING TO {reply_count} MESSAGES{C.RESET}")
         print(f"{C.BOLD}{C.BLUE}{'='*80}{C.RESET}\n")
         
+        # Build context dari previous messages di buffer
+        context_for_ai = []
+        for msg in messages_buffer:
+            context_for_ai.append({
+                'sender': msg['sender_name'],
+                'text': msg['text']
+            })
+        
         # Reply to each message
         for idx, msg in enumerate(selected, 1):
             sender_name = msg['sender_name']
             user_text = msg['text']
             event = msg['event']
             
-            # Generate response
-            reply_text, is_fallback = generate_ai_response(sender_name, user_text)
+            # Generate response dengan context
+            reply_text, is_fallback = generate_ai_response(sender_name, user_text, context_for_ai)
             
             # Random typing time
             typing_time = random.randint(DELAY_MIN, DELAY_MAX)
@@ -389,16 +385,13 @@ async def reply_sequence():
         minutes = rest_duration // 60
         seconds = rest_duration % 60
         print(f"{C.YELLOW}⏸️  BOT RESTING for {minutes}m {seconds}s{C.RESET}")
-        print(f"{C.YELLOW}💬 Chat tetap masuk ke buffer saat istirahat...{C.RESET}\n")
         
-        logger.info(f"Bot resting for {rest_duration} seconds (Chat tetap masuk ke buffer)")
+        logger.info(f"Bot resting for {rest_duration} seconds")
         stats['rest_sessions'] += 1
         
-        # Sleep tapi chat tetap bisa masuk (handled by event handler)
         await asyncio.sleep(rest_duration)
         
-        print(f"{C.GREEN}🌅 BOT WOKE UP - Ready for next batch!{C.RESET}")
-        print(f"{C.GREEN}📦 Buffer sekarang punya {len(messages_buffer)} pesan yang masuk saat istirahat{C.RESET}\n")
+        print(f"{C.GREEN}🌅 BOT WOKE UP - Ready for next batch!{C.RESET}\n")
         
         # After wake up - check if silent
         time_silent = (datetime.now() - last_activity).total_seconds()
@@ -416,14 +409,9 @@ async def reply_sequence():
 # ==================== SMART OPENING ====================
 
 async def smart_open():
-    """
-    Send AI-generated random opening message
-    Setiap opening BERBEDA karena di-generate oleh AI dengan temperature=1.0
-    """
+    """Send smart opening message"""
     try:
-        # Generate random opening dengan AI (BENAR-BENAR RANDOM!)
-        msg = generate_opening_message()
-        
+        msg = random.choice(OPENING_MESSAGES)
         await client.send_message(TARGET_GROUP, msg, reply_to=TOPIC_ID)
         print(f"{C.GREEN}📢 [OPENING] {msg}{C.RESET}")
         logger.info(f"Smart opening sent: {msg}")
@@ -473,8 +461,7 @@ async def main():
         await client.start()
         
         logger.info("✅ Connected successfully!")
-        print(f"{C.GREEN}✅ USERBOT ACTIVE - LISTENING FOR MESSAGES{C.RESET}")
-        print(f"{C.GREEN}💬 Chat akan ditampilkan REAL-TIME saat istirahat!{C.RESET}\n")
+        print(f"{C.GREEN}✅ USERBOT ACTIVE - LISTENING FOR MESSAGES{C.RESET}\n")
         
         # Start smart opening task
         smart_task = asyncio.create_task(smart_opening_task())
