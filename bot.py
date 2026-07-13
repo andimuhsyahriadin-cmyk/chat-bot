@@ -1,7 +1,7 @@
 """
-TELEGRAM USERBOT DENGAN GEMINI 3.1 AI - INDONESIA FOKUS
+TELEGRAM USERBOT DENGAN GEMINI 3.1 FLASH-LITE AI - INDONESIA FOKUS
 Single file complete bot - ready untuk Termux
-IMPROVED: Gemini 3.1 Pro + Better response quality + Robust error handling
+IMPROVED: Gemini 3.1 Flash-Lite + Better response quality + Robust error handling
 """
 
 import asyncio
@@ -199,7 +199,7 @@ def detect_language(text):
 def print_banner():
     """Print bot banner"""
     print(f"\n{C.CYAN}{C.BOLD}" + "="*80)
-    print(f"        🤖 TELEGRAM USERBOT DENGAN GEMINI 3.1 AI 🇮🇩")
+    print(f"        🤖 TELEGRAM USERBOT DENGAN GEMINI 3.1 FLASH-LITE AI 🇮🇩")
     print(f"        Indonesia-Only • 3-Chat Cycle • Natural Response • Strict Topic Filter")
     print(f"="*80 + f"{C.RESET}\n")
 
@@ -283,7 +283,7 @@ def get_message_topic_id(message):
 
 def generate_ai_response(sender_name, user_text, context_messages=None, retry=0):
     """
-    Generate response dengan Gemini 3.1 Pro - STRICT INDONESIA + NATURAL
+    Generate response dengan Gemini 3.1 Flash-Lite - STRICT INDONESIA + NATURAL
     Improved: Better prompts, retry logic, quality validation
     """
     if retry > 2:
@@ -306,7 +306,7 @@ def generate_ai_response(sender_name, user_text, context_messages=None, retry=0)
         
         system_prompt = random.choice(SYSTEM_PROMPTS)
         
-        # Better templates untuk Gemini 3.1
+        # Better templates untuk Gemini 3.1 Flash-Lite
         template = random.choice([
             "{context}Sekarang {sender} berkata: {text}\nBales singkat dan casual:",
             "{context}{sender}: {text}\nReply kamu (natural, singkat, 1-2 kalimat):",
@@ -317,14 +317,14 @@ def generate_ai_response(sender_name, user_text, context_messages=None, retry=0)
         
         prompt = template.format(context=context, sender=sender_name, text=user_text[:150])
         
-        # Use Gemini 3.1 Pro (or Flash as fallback)
+        # Use Gemini 3.1 Flash-Lite (optimized untuk speed + quality)
         response = ai_client.models.generate_content(
-            model='gemini-3.1-pro-latest',  # Primary: Pro
+            model='gemini-3.1-flash-lite',
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                temperature=0.9,  # Lebih tinggi untuk natural
-                max_output_tokens=80,  # Slightly more room for natural responses
+                temperature=0.9,  # Natural responses
+                max_output_tokens=80,  # Room for natural responses
                 top_p=0.95,
                 top_k=40
             )
@@ -656,7 +656,7 @@ async def main():
     logger.info("="*80)
     logger.info("BOT STARTING - INDONESIA FOKUS")
     logger.info(f"Target: {TARGET_GROUP} | Topic: #{TOPIC_ID}")
-    logger.info("Model: Gemini 3.1 Pro Latest")
+    logger.info("Model: Gemini 3.1 Flash-Lite")
     logger.info("="*80)
     
     try:
@@ -667,7 +667,7 @@ async def main():
         print(f"{C.GREEN}✅ USERBOT ACTIVE - INDONESIA ONLY 🇮🇩{C.RESET}\n")
         print(f"{C.CYAN}LOGIC: Tunggu 3 chat → Balas natural → Istirahat → Repeat{C.RESET}")
         print(f"{C.CYAN}FILTER: Hanya dari topic #{TOPIC_ID} • Hanya Bahasa Indonesia{C.RESET}")
-        print(f"{C.CYAN}AI: Gemini 3.1 Pro dengan natural response{C.RESET}")
+        print(f"{C.CYAN}AI: Gemini 3.1 Flash-Lite dengan natural response{C.RESET}")
         print(f"{C.CYAN}Press Ctrl+C to instant shutdown{C.RESET}\n")
         
         # Start background task
