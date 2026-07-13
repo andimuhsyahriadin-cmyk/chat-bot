@@ -61,7 +61,7 @@ pkg install python git
 ### 2. Clone Repository
 ```bash
 git clone https://github.com/adinsaja726-netizen/Chat-tele.git
-cd chat-tele
+cd Chat-tele
 ```
 
 ### 3. Install Requirements
