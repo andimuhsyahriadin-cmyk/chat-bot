@@ -2,6 +2,7 @@
 TELEGRAM USERBOT DENGAN GEMINI 3.1 AI - INDONESIA FOKUS
 Single file complete bot - ready untuk Termux
 IMPROVED: Strict Indonesia-only + Topic filtering + Language detection
+FIX: Correct topic_id detection for original messages + improved message handling
 """
 
 import asyncio
@@ -234,6 +235,35 @@ def print_stats():
     print(f"{C.GREEN}⚠️  Errors:{C.RESET} {stats['errors']}")
     print(f"{C.BOLD}{C.CYAN}{'='*80}{C.RESET}\n")
 
+# ==================== TOPIC ID DETECTION (FIXED) ====================
+
+def get_message_topic_id(message):
+    """
+    FIX: Extract topic ID from message correctly
+    - For replies: use reply_to_top_id
+    - For original messages in topic: use topics_id (Telethon 1.31+)
+    - Fallback to None if not in a topic
+    """
+    try:
+        # For replies to messages in a topic
+        if message.reply_to and hasattr(message.reply_to, 'reply_to_top_id'):
+            return message.reply_to.reply_to_top_id
+        
+        # For original messages in a topic (Telethon 1.31+)
+        if hasattr(message, 'topic_id') and message.topic_id:
+            return message.topic_id
+        
+        # Fallback: check if message has forum_topic attribute
+        if hasattr(message, 'forum_topic') and message.forum_topic:
+            return message.forum_topic
+        
+        # Last resort: None (not in a topic)
+        return None
+    
+    except Exception as e:
+        logger.debug(f"Error extracting topic_id: {e}")
+        return None
+
 # ==================== AI ENGINE ====================
 
 def generate_ai_response(sender_name, user_text, context_messages=None):
@@ -261,7 +291,7 @@ def generate_ai_response(sender_name, user_text, context_messages=None):
         contents = template.format(context=context, sender=sender_name, text=user_text[:120])
         
         response = ai_client.models.generate_content(
-            model='gemini-3.1-flash-lite',
+            model='gemini-1.5-flash',
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -313,8 +343,8 @@ async def handle_message(event):
         if getattr(event.message, 'out', False):
             return
         
-        # STRICT: Only accept from INDONESIA TOPIC
-        topic_id = event.message.reply_to.reply_to_top_id if event.message.reply_to else None
+        # STRICT: Only accept from INDONESIA TOPIC (FIXED)
+        topic_id = get_message_topic_id(event.message)
         if topic_id != TOPIC_ID:
             logger.debug(f"Skipped: Wrong topic {topic_id} (should be {TOPIC_ID})")
             stats['messages_skipped'] += 1
@@ -438,9 +468,14 @@ async def start_reply_cycle():
                 if not should_exit:
                     try:
                         await event.reply(reply_text)
-                    except:
+                    except Exception as send_error:
+                        logger.warning(f"Reply failed: {send_error}, trying fallback send...")
                         # Fallback: send as message to topic
-                        await client.send_message(TARGET_GROUP, reply_text, reply_to=TOPIC_ID)
+                        try:
+                            await client.send_message(TARGET_GROUP, reply_text, reply_to=TOPIC_ID)
+                        except Exception as fallback_error:
+                            logger.error(f"Fallback send also failed: {fallback_error}")
+                            raise
                     
                     response_type = "FALLBACK" if is_fallback else "AI"
                     print(f"   {C.GREEN}└─ ✅ [REPLY/{response_type}] {reply_text}{C.RESET}")
@@ -449,7 +484,7 @@ async def start_reply_cycle():
                     logger.info(f"[INDONESIA] Reply to {sender_name}: {reply_text[:50]}")
                 
             except Exception as e:
-                logger.error(f"Error sending reply: {e}")
+                logger.error(f"Error sending reply to {sender_name}: {e}")
                 stats['errors'] += 1
                 continue
         
