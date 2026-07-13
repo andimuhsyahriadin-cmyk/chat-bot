@@ -1,6 +1,7 @@
 """
 TELEGRAM USERBOT DENGAN GEMINI 3.1 AI
 Single file complete bot - ready untuk Termux
+Chat tetap masuk saat istirahat + AI Generated Random Opening
 """
 
 import asyncio
@@ -77,16 +78,6 @@ stats = {
 # Skip keywords
 SKIP_KEYWORDS = ['admin', 'moderator', 'warning', '[bot]', 'report', 'spam', 'banned']
 
-# Opening messages
-OPENING_MESSAGES = [
-    "Woi pada ngapain nih? Sepi banget",
-    "Gimana kabar kalian semua bro?",
-    "Ada yang seru nggak hari ini?",
-    "Anjir sepi amat, gas lah ngobrol",
-    "Ayo dong lanjut obrolan",
-    "Siapa ada ide obrolan asik?",
-]
-
 # System prompts (variation untuk hindari deteksi bot)
 SYSTEM_PROMPTS = [
     "Kamu temen gaul. Balas pendek, santai, nyambung sama obrolan.",
@@ -99,6 +90,9 @@ SYSTEM_PROMPTS = [
 # Fallback responses
 FALLBACK_RESPONSES = ["Wkwk setuju", "Haha true", "Sama sih", "Hehe iya", "Bet", "Noted", "Okee"]
 
+# Opening prompt - AI akan generate opening yang random
+OPENING_PROMPT = "Generate 1 casual Indonesian greeting yang singkat (1 sentence max) untuk buka percakapan di grup. Harus terlihat seperti teman biasa yang lagi santai. Jangan formal. Contoh: 'Woi pada ngapain nih?', 'Ada yang seru nggak hari ini?'. Generate hanya 1 kalimat saja, tanpa penjelasan."
+
 # ==================== HELPER FUNCTIONS ====================
 
 def print_banner():
@@ -106,6 +100,7 @@ def print_banner():
     print(f"\n{C.CYAN}{C.BOLD}" + "="*80)
     print(f"        🤖 TELEGRAM USERBOT DENGAN GEMINI 3.1 AI 🤖")
     print(f"        Smart Reply • Intelligent Rest • Real-time Monitoring")
+    print(f"        💬 Chat Masuk Saat Istirahat • AI Generated Opening")
     print(f"="*80 + f"{C.RESET}\n")
 
 def validate_config():
@@ -210,11 +205,53 @@ def generate_ai_response(sender_name, user_text):
     fallback = random.choice(FALLBACK_RESPONSES)
     return fallback, True
 
+def generate_opening_message():
+    """Generate random opening message menggunakan AI (BENAR-BENAR RANDOM!)"""
+    try:
+        response = ai_client.models.generate_content(
+            model='gemini-3.1-flash-lite',
+            contents=OPENING_PROMPT,
+            config=types.GenerateContentConfig(
+                system_instruction="Kamu adalah teman yang santai di grup Telegram. Generate greeting yang natural.",
+                temperature=1.0,  # Max randomness untuk opening!
+                max_output_tokens=20
+            )
+        )
+        
+        if response and response.text:
+            opening_text = response.text.strip()
+            # Cleanup
+            opening_text = opening_text.replace('**', '').replace('__', '').replace('```', '')
+            opening_text = opening_text.replace('"', '').replace("'", '')
+            opening_text = ' '.join(opening_text.split())
+            
+            # Jika terlalu panjang, potong
+            if len(opening_text) > 80:
+                opening_text = opening_text[:77] + "..."
+            
+            return opening_text
+    
+    except Exception as e:
+        logger.error(f"AI Opening Error: {e}")
+        stats['errors'] += 1
+    
+    # Fallback generic opening
+    fallback_openings = [
+        "Apa kabar kalian?",
+        "Halo semua!",
+        "Ada yang bisa dibantu?",
+        "Gimana nih?",
+    ]
+    return random.choice(fallback_openings)
+
 # ==================== MESSAGE HANDLING ====================
 
 @client.on(events.NewMessage(chats=TARGET_GROUP))
 async def handle_message(event):
-    """Handle incoming messages"""
+    """
+    Handle incoming messages
+    ✅ CHAT TETAP MASUK SAAT ISTIRAHAT - REAL TIME DISPLAY!
+    """
     global messages_buffer, last_activity, is_replying
     
     try:
@@ -238,7 +275,7 @@ async def handle_message(event):
         if not user_text or len(user_text.strip()) < 3:
             return
         
-        # Display message (SEMUA CHAT DITAMPILKAN!)
+        # ✅ DISPLAY MESSAGE (SEMUA CHAT DITAMPILKAN REAL-TIME!)
         timestamp = datetime.now().strftime("%H:%M:%S")
         print(f"{C.YELLOW}[{timestamp}] {C.BOLD}{sender_name}{C.RESET}: {user_text}")
         
@@ -282,6 +319,8 @@ async def reply_sequence():
     3. Show typing indicator
     4. Rest 1:50-2:20
     5. Buka percakapan jika sepi
+    
+    PENTING: Chat tetap masuk ke buffer saat istirahat!
     """
     global is_replying, messages_buffer, last_activity
     
@@ -350,13 +389,16 @@ async def reply_sequence():
         minutes = rest_duration // 60
         seconds = rest_duration % 60
         print(f"{C.YELLOW}⏸️  BOT RESTING for {minutes}m {seconds}s{C.RESET}")
+        print(f"{C.YELLOW}💬 Chat tetap masuk ke buffer saat istirahat...{C.RESET}\n")
         
-        logger.info(f"Bot resting for {rest_duration} seconds")
+        logger.info(f"Bot resting for {rest_duration} seconds (Chat tetap masuk ke buffer)")
         stats['rest_sessions'] += 1
         
+        # Sleep tapi chat tetap bisa masuk (handled by event handler)
         await asyncio.sleep(rest_duration)
         
-        print(f"{C.GREEN}🌅 BOT WOKE UP - Ready for next batch!{C.RESET}\n")
+        print(f"{C.GREEN}🌅 BOT WOKE UP - Ready for next batch!{C.RESET}")
+        print(f"{C.GREEN}📦 Buffer sekarang punya {len(messages_buffer)} pesan yang masuk saat istirahat{C.RESET}\n")
         
         # After wake up - check if silent
         time_silent = (datetime.now() - last_activity).total_seconds()
@@ -374,9 +416,14 @@ async def reply_sequence():
 # ==================== SMART OPENING ====================
 
 async def smart_open():
-    """Send smart opening message"""
+    """
+    Send AI-generated random opening message
+    Setiap opening BERBEDA karena di-generate oleh AI dengan temperature=1.0
+    """
     try:
-        msg = random.choice(OPENING_MESSAGES)
+        # Generate random opening dengan AI (BENAR-BENAR RANDOM!)
+        msg = generate_opening_message()
+        
         await client.send_message(TARGET_GROUP, msg, reply_to=TOPIC_ID)
         print(f"{C.GREEN}📢 [OPENING] {msg}{C.RESET}")
         logger.info(f"Smart opening sent: {msg}")
@@ -426,7 +473,8 @@ async def main():
         await client.start()
         
         logger.info("✅ Connected successfully!")
-        print(f"{C.GREEN}✅ USERBOT ACTIVE - LISTENING FOR MESSAGES{C.RESET}\n")
+        print(f"{C.GREEN}✅ USERBOT ACTIVE - LISTENING FOR MESSAGES{C.RESET}")
+        print(f"{C.GREEN}💬 Chat akan ditampilkan REAL-TIME saat istirahat!{C.RESET}\n")
         
         # Start smart opening task
         smart_task = asyncio.create_task(smart_opening_task())
