@@ -1,7 +1,7 @@
 """
 TELEGRAM USERBOT DENGAN GEMINI 3.1 AI
 Single file complete bot - ready untuk Termux
-IMPROVED: Smart deep reply detection + Intelligent context-aware responses
+IMPROVED: Smart deep reply detection + Intelligent context-aware responses + Graceful shutdown
 """
 
 import asyncio
@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
+from telethon.tl.types import MessageActionChatDeleteUser, MessageActionChatAddUser
 from google import genai
 from google.genai import types
 
@@ -67,16 +68,20 @@ messages_buffer = []
 is_replying = False
 last_activity = datetime.now()
 should_exit = False
+shutdown_event = asyncio.Event()
+active_tasks = set()
+
 stats = {
     'messages_received': 0,
     'messages_replied': 0,
+    'deep_replies_skipped': 0,
     'errors': 0,
     'rest_sessions': 0,
     'start_time': datetime.now()
 }
 
 # Skip keywords
-SKIP_KEYWORDS = ['admin', 'moderator', 'warning', '[bot]', 'report', 'spam', 'banned']
+SKIP_KEYWORDS = ['admin', 'moderator', 'warning', '[bot]', 'report', 'spam', 'banned', 'kick', 'mute']
 
 # Opening messages
 OPENING_MESSAGES = [
@@ -90,15 +95,15 @@ OPENING_MESSAGES = [
 
 # System prompts (variation untuk hindari deteksi bot)
 SYSTEM_PROMPTS = [
-    "Kamu temen gaul. Balas pendek, santai, nyambung sama obrolan.",
-    "Jadi temen yang fun dan natural. Jangan formal atau membosankan.",
-    "Respond seperti teman yang lagi santai di grup. Keep it real.",
-    "Balas dengan energi dan sedikit humor. Jangan terlalu panjang.",
-    "Ngobrol seperti teman biasa. Santai, natural, dan straightforward.",
+    "Kamu adalah teman gaul di grup chat. PENTING: Balas SANGAT pendek (1-2 kalimat max), santai, natural, dan nyambung sempurna dengan obrolan. Jangan panjang-panjang. Jangan formal.",
+    "Jadi teman yang fun dan natural dalam grup. Balas super singkat, santai, dan langsung to the point. Keep it real dan ga membosankan.",
+    "Respond seperti teman yang lagi santai di grup Telegram. Balas pendek, casual, dan LANGSUNG NYAMBUNG dengan apa yang mereka bilang. No over-thinking.",
+    "Balas dengan energi dan sedikit humor, tapi SINGKAT. Hanya 1-2 kalimat. Jangan terlalu panjang atau formal.",
+    "Ngobrol seperti teman biasa dalam grup. Santai, natural, straightforward, dan sangat singkat. Langsung nyambung topik.",
 ]
 
 # Fallback responses
-FALLBACK_RESPONSES = ["Wkwk setuju", "Haha true", "Sama sih", "Hehe iya", "Bet", "Noted", "Okee"]
+FALLBACK_RESPONSES = ["Wkwk setuju", "Haha true", "Sama sih", "Hehe iya", "Bet", "Okee", "Betul", "Fix", "Noted"]
 
 # ==================== HELPER FUNCTIONS ====================
 
@@ -106,7 +111,7 @@ def print_banner():
     """Print bot banner"""
     print(f"\n{C.CYAN}{C.BOLD}" + "="*80)
     print(f"        🤖 TELEGRAM USERBOT DENGAN GEMINI 3.1 AI 🤖")
-    print(f"        Smart Reply • Intelligent Rest • Real-time Monitoring")
+    print(f"        Smart Reply • Deep Reply Detection • Context-Aware • Graceful Shutdown")
     print(f"="*80 + f"{C.RESET}\n")
 
 def validate_config():
@@ -129,25 +134,32 @@ def get_topic_id(message):
 
 def is_deep_reply(message):
     """
-    IMPROVED: Check if deep reply (reply to reply) dengan logic yang lebih akurat
-    Deep reply = pesan yang reply ke pesan lain (bukan top-level)
-    Logic:
-    1. Jika tidak ada reply_to → top-level (return False)
-    2. Jika reply_to ada, cek apakah itu reply to thread/topic → top-level (return False)
-    3. Jika reply to pesan spesifik (reply_to_msg_id ada) → deep reply (return True)
+    IMPROVED: Detect deep reply dengan logic yang akurat
+    
+    Deep reply = reply yang reply ke pesan tertentu (bukan top-level)
+    
+    Return True jika:
+    - reply_to_msg_id ada (reply ke msg spesifik, bukan thread)
+    - dan BUKAN reply ke top-level comment
     """
     if not message.reply_to:
         return False
     
-    # Check if ini reply to thread/topic (reply_to_top_id)
+    # Check if ini reply to thread (reply_to_top_id)
     reply_to_top = getattr(message.reply_to, 'reply_to_top_id', None)
-    if reply_to_top:
-        # Ada reply_to_top_id tapi bukan nested = top-level di thread
-        return False
     
-    # Check if ini actual reply ke pesan lain
+    # Check if ini actual reply ke pesan spesifik
     reply_to_msg = getattr(message.reply_to, 'reply_to_msg_id', None)
-    return reply_to_msg is not None
+    
+    # Deep reply = has reply_to_msg_id tapi BUKAN reply to top comment
+    if reply_to_msg and not reply_to_top:
+        return True
+    
+    # Jika ada both, berarti nested/deep
+    if reply_to_msg and reply_to_top:
+        return True
+    
+    return False
 
 def should_skip_keywords(text):
     """Check skip keywords"""
@@ -179,6 +191,7 @@ def print_stats():
     print(f"{C.GREEN}📨 Messages Received:{C.RESET} {received}")
     print(f"{C.GREEN}✅ Messages Replied:{C.RESET} {replied}")
     print(f"{C.GREEN}⏸️  Reply Rate:{C.RESET} {rate:.1f}%")
+    print(f"{C.GREEN}🚫 Deep Replies Skipped:{C.RESET} {stats['deep_replies_skipped']}")
     print(f"{C.GREEN}⚠️  Errors:{C.RESET} {stats['errors']}")
     print(f"{C.GREEN}😴 Rest Sessions:{C.RESET} {stats['rest_sessions']}")
     print(f"{C.BOLD}{C.CYAN}{'='*80}{C.RESET}\n")
@@ -187,53 +200,80 @@ def print_stats():
 
 def generate_ai_response(sender_name, user_text, context_messages=None):
     """
-    IMPROVED: Generate response menggunakan Gemini 3.1 AI dengan context awareness
-    context_messages: List of recent messages untuk context yang lebih baik
+    IMPROVED: Generate response dengan Gemini 3.1 AI yang SMART
+    - Context-aware dari recent messages
+    - Smart reply detection untuk nyambung obrolan
+    - Fallback jika Gemini error
+    
+    Args:
+        sender_name: Nama pengirim pesan
+        user_text: Text dari pesan
+        context_messages: List of recent messages untuk context
+    
+    Returns:
+        tuple(reply_text, is_fallback)
     """
     try:
-        # Build context dari recent messages
+        # Build context dari recent messages untuk AI understand obrolan
         context = ""
-        if context_messages:
+        if context_messages and len(context_messages) > 0:
+            # Ambil last 4 messages untuk context yang natural
+            recent = context_messages[-4:]
             context = "Konteks obrolan terakhir:\n"
-            for msg in context_messages[-3:]:  # Last 3 messages
-                context += f"- {msg['sender']}: {msg['text']}\n"
+            for msg in recent:
+                short_text = msg['text'][:80]  # Truncate long messages
+                context += f"- {msg['sender']}: {short_text}\n"
             context += "\n"
         
-        # Pick random system prompt dan template
+        # Pick random system prompt untuk variation
         system_prompt = random.choice(SYSTEM_PROMPTS)
+        
+        # Template yang lebih natural
         template = random.choice([
-            "{context}Balas gaul Indonesia sesuai konteks:\n{sender}: {text}",
-            "{context}Respond in casual Indonesian:\n{sender}: {text}",
-            "{context}Komentar santai:\n{sender}: {text}",
+            "{context}Balas singkat dan nyambung:\n{sender}: {text}\nJawab cepat dalam 1-2 kalimat:",
+            "{context}Sekarang giliran kamu reply. Balas santai dan langsung nyambung:\n{sender}: {text}",
+            "{context}Teman ngomong:\n{sender}: {text}\nKamu reply (singkat & natural):",
         ])
         
-        contents = template.format(context=context, sender=sender_name, text=user_text)
+        contents = template.format(
+            context=context,
+            sender=sender_name,
+            text=user_text[:120]  # Truncate untuk efficiency
+        )
         
-        # Call Gemini 3.1 Flash Lite dengan temperature tinggi untuk variasi
+        # Call Gemini 3.1 Flash Lite
         response = ai_client.models.generate_content(
             model='gemini-3.1-flash-lite',
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                temperature=0.88,
-                max_output_tokens=75
+                temperature=0.85,  # Sedikit lebih tinggi untuk variation
+                max_output_tokens=60,  # Lebih pendek = lebih natural
+                top_p=0.9
             )
         )
         
         if response and response.text:
             reply_text = response.text.strip()
-            # Cleanup markdown formatting
+            
+            # Cleanup formatting
             reply_text = reply_text.replace('**', '').replace('__', '').replace('```', '')
+            reply_text = reply_text.replace('"', '').replace("'", '')
             reply_text = ' '.join(reply_text.split())
+            
+            # Final length check
             if len(reply_text) > 150:
                 reply_text = reply_text[:147] + "..."
-            return reply_text, False
+            
+            # Validasi: harus ada text, jangan terlalu pendek
+            if reply_text and len(reply_text.strip()) > 2:
+                return reply_text, False
     
     except Exception as e:
         logger.error(f"AI Error: {e}")
         stats['errors'] += 1
     
-    # Fallback
+    # Fallback jika AI gagal
     fallback = random.choice(FALLBACK_RESPONSES)
     return fallback, True
 
@@ -258,6 +298,10 @@ async def handle_message(event):
         if not sender:
             return
         
+        # Skip bot messages
+        if sender.bot:
+            return
+        
         sender_name = sender.first_name or "Unknown"
         user_text = event.message.text or ''
         
@@ -265,20 +309,22 @@ async def handle_message(event):
         if not user_text or len(user_text.strip()) < 3:
             return
         
-        # Display message (SEMUA CHAT DITAMPILKAN!)
+        # Display message
         timestamp = datetime.now().strftime("%H:%M:%S")
         print(f"{C.YELLOW}[{timestamp}] {C.BOLD}{sender_name}{C.RESET}: {user_text}")
         
         stats['messages_received'] += 1
         last_activity = datetime.now()
         
-        # Check conditions
+        # Check if deep reply - IMPROVED LOGIC
         if is_deep_reply(event.message):
-            print(f"   {C.CYAN}└─ ⏭️ Skip (deep reply){C.RESET}")
+            print(f"   {C.CYAN}└─ ⏭️  Skip (deep reply to specific message){C.RESET}")
+            stats['deep_replies_skipped'] += 1
             return
         
+        # Skip keywords
         if should_skip_keywords(user_text):
-            print(f"   {C.CYAN}└─ ⏭️ Skip (keyword){C.RESET}")
+            print(f"   {C.CYAN}└─ ⏭️  Skip (keyword filter){C.RESET}")
             return
         
         # Add to buffer
@@ -286,14 +332,18 @@ async def handle_message(event):
             'sender_id': sender.id,
             'sender_name': sender_name,
             'text': user_text,
-            'event': event
+            'event': event,
+            'timestamp': datetime.now()
         })
         
         print(f"   {C.MAGENTA}└─ 📦 Buffer: {len(messages_buffer)} messages{C.RESET}")
         
         # Check if should trigger reply
         if len(messages_buffer) >= MIN_REPLY and not is_replying:
-            await reply_sequence()
+            # Create task dan track
+            task = asyncio.create_task(reply_sequence())
+            active_tasks.add(task)
+            task.add_done_callback(active_tasks.discard)
     
     except Exception as e:
         logger.error(f"Error handling message: {e}")
@@ -303,12 +353,13 @@ async def handle_message(event):
 
 async def reply_sequence():
     """
-    Reply sequence dengan improved context awareness:
+    Reply sequence dengan improved context awareness dan graceful handling:
     1. Pilih random 1-3 messages dari buffer
-    2. Reply dengan delay 30-45s random per reply
-    3. Show typing indicator
-    4. Rest 1:50-2:20
-    5. Buka percakapan jika sepi
+    2. Build context dari previous messages
+    3. Reply dengan delay 30-45s random per reply
+    4. Show typing indicator
+    5. Rest 1:50-2:20
+    6. Buka percakapan jika sepi
     """
     global is_replying, messages_buffer, last_activity
     
@@ -323,14 +374,14 @@ async def reply_sequence():
         if len(messages_buffer) < reply_count:
             reply_count = len(messages_buffer)
         
-        # Select random messages
+        # Select random messages untuk reply
         selected = random.sample(messages_buffer, reply_count)
         
         print(f"\n{C.BOLD}{C.BLUE}{'='*80}{C.RESET}")
         print(f"{C.BOLD}🤖 REPLYING TO {reply_count} MESSAGES{C.RESET}")
         print(f"{C.BOLD}{C.BLUE}{'='*80}{C.RESET}\n")
         
-        # Build context dari previous messages di buffer
+        # Build context dari ALL messages di buffer untuk AI understanding
         context_for_ai = []
         for msg in messages_buffer:
             context_for_ai.append({
@@ -340,64 +391,82 @@ async def reply_sequence():
         
         # Reply to each message
         for idx, msg in enumerate(selected, 1):
+            # Check if should exit
+            if should_exit:
+                print(f"{C.YELLOW}⚠️  Shutdown signal received, stopping replies...{C.RESET}")
+                break
+            
             sender_name = msg['sender_name']
             user_text = msg['text']
             event = msg['event']
             
-            # Generate response dengan context
-            reply_text, is_fallback = generate_ai_response(sender_name, user_text, context_for_ai)
-            
-            # Random typing time
-            typing_time = random.randint(DELAY_MIN, DELAY_MAX)
-            print(f"   {C.CYAN}└─ 🤔 Thinking... ({typing_time}s){C.RESET}")
-            
-            # Show typing action
             try:
-                async with client.action(TARGET_GROUP, 'typing'):
+                # Generate response dengan context
+                reply_text, is_fallback = generate_ai_response(sender_name, user_text, context_for_ai)
+                
+                # Random typing time
+                typing_time = random.randint(DELAY_MIN, DELAY_MAX)
+                print(f"   {C.CYAN}└─ 🤔 Thinking... ({typing_time}s){C.RESET}")
+                
+                # Show typing action dengan cancel support
+                try:
+                    async with client.action(TARGET_GROUP, 'typing'):
+                        await asyncio.sleep(typing_time)
+                except:
                     await asyncio.sleep(typing_time)
-            except:
-                await asyncio.sleep(typing_time)
+                
+                # Send reply
+                await event.reply(reply_text)
+                response_type = "FALLBACK" if is_fallback else "AI"
+                print(f"   {C.GREEN}└─ ✅ [{response_type}] {reply_text}{C.RESET}")
+                
+                stats['messages_replied'] += 1
+                last_activity = datetime.now()
+                
+                logger.info(f"Reply #{idx}/{reply_count} sent ({response_type})")
+                
+                # Delay before next reply (jika bukan last)
+                if idx < reply_count and not should_exit:
+                    next_delay = random.randint(DELAY_MIN, DELAY_MAX)
+                    await asyncio.sleep(next_delay)
             
-            # Send reply
-            await event.reply(reply_text)
-            print(f"   {C.GREEN}└─ ✅ [REPLY] {reply_text}{C.RESET}")
-            
-            stats['messages_replied'] += 1
-            last_activity = datetime.now()
-            
-            logger.info(f"Reply #{idx}/{reply_count} sent")
-            
-            # Delay before next reply (jika bukan last)
-            if idx < reply_count:
-                next_delay = random.randint(DELAY_MIN, DELAY_MAX)
-                await asyncio.sleep(next_delay)
+            except Exception as e:
+                logger.error(f"Error sending reply #{idx}: {e}")
+                stats['errors'] += 1
+                continue
         
         print(f"\n{C.BOLD}{C.BLUE}{'='*80}{C.RESET}")
-        print(f"{C.GREEN}✅ ALL REPLIES SENT{C.RESET}")
+        print(f"{C.GREEN}✅ REPLY BATCH COMPLETE{C.RESET}")
         print(f"{C.BOLD}{C.BLUE}{'='*80}{C.RESET}\n")
         
         # Remove replied messages dari buffer
         for msg in selected:
-            messages_buffer.remove(msg)
+            if msg in messages_buffer:
+                messages_buffer.remove(msg)
         
-        # Rest period
-        rest_duration = random.randint(REST_MIN, REST_MAX)
-        minutes = rest_duration // 60
-        seconds = rest_duration % 60
-        print(f"{C.YELLOW}⏸️  BOT RESTING for {minutes}m {seconds}s{C.RESET}")
-        
-        logger.info(f"Bot resting for {rest_duration} seconds")
-        stats['rest_sessions'] += 1
-        
-        await asyncio.sleep(rest_duration)
-        
-        print(f"{C.GREEN}🌅 BOT WOKE UP - Ready for next batch!{C.RESET}\n")
-        
-        # After wake up - check if silent
-        time_silent = (datetime.now() - last_activity).total_seconds()
-        if time_silent > SILENCE and not messages_buffer:
-            print(f"{C.YELLOW}[SMART OPEN] Grup sepi {int(time_silent)}s, buka obrolan...{C.RESET}")
-            await smart_open()
+        # Rest period (skip if should_exit)
+        if not should_exit:
+            rest_duration = random.randint(REST_MIN, REST_MAX)
+            minutes = rest_duration // 60
+            seconds = rest_duration % 60
+            print(f"{C.YELLOW}⏸️  BOT RESTING for {minutes}m {seconds}s{C.RESET}")
+            
+            logger.info(f"Bot resting for {rest_duration} seconds")
+            stats['rest_sessions'] += 1
+            
+            try:
+                await asyncio.sleep(rest_duration)
+            except asyncio.CancelledError:
+                logger.warning("Rest period interrupted")
+                return
+            
+            print(f"{C.GREEN}🌅 BOT WOKE UP - Ready for next batch!{C.RESET}\n")
+            
+            # After wake up - check if silent
+            time_silent = (datetime.now() - last_activity).total_seconds()
+            if time_silent > SILENCE and not messages_buffer:
+                print(f"{C.YELLOW}[SMART OPEN] Grup sepi {int(time_silent)}s, buka obrolan...{C.RESET}")
+                await smart_open()
     
     except Exception as e:
         logger.error(f"Error in reply sequence: {e}")
@@ -411,10 +480,15 @@ async def reply_sequence():
 async def smart_open():
     """Send smart opening message"""
     try:
+        if should_exit:
+            return
+        
         msg = random.choice(OPENING_MESSAGES)
         await client.send_message(TARGET_GROUP, msg, reply_to=TOPIC_ID)
         print(f"{C.GREEN}📢 [OPENING] {msg}{C.RESET}")
         logger.info(f"Smart opening sent: {msg}")
+        
+        global last_activity
         last_activity = datetime.now()
     except Exception as e:
         logger.error(f"Smart opening failed: {e}")
@@ -437,6 +511,40 @@ async def smart_opening_task():
         except Exception as e:
             logger.error(f"Smart opening task error: {e}")
             await asyncio.sleep(5)
+
+# ==================== GRACEFUL SHUTDOWN ====================
+
+async def graceful_shutdown():
+    """Graceful shutdown - wait for active tasks"""
+    global should_exit
+    should_exit = True
+    
+    print(f"\n{C.YELLOW}{C.BOLD}🛑 GRACEFUL SHUTDOWN INITIATED{C.RESET}")
+    print(f"{C.YELLOW}Waiting for active tasks to complete...{C.RESET}\n")
+    
+    # Wait for any active reply task
+    if is_replying:
+        print(f"{C.YELLOW}Waiting for current reply to finish...{C.RESET}")
+        timeout = 30
+        for i in range(timeout):
+            if not is_replying:
+                break
+            await asyncio.sleep(1)
+            if i % 5 == 0:
+                print(f"{C.YELLOW}Still waiting... ({timeout - i}s timeout){C.RESET}")
+    
+    # Wait for other tasks
+    if active_tasks:
+        print(f"{C.YELLOW}Waiting for {len(active_tasks)} background task(s)...{C.RESET}")
+        await asyncio.gather(*active_tasks, return_exceptions=True)
+    
+    print(f"{C.GREEN}✅ All tasks completed{C.RESET}")
+
+def signal_handler(signum, frame):
+    """Handle Ctrl+C"""
+    logger.warning(f"Received signal {signum}, initiating graceful shutdown...")
+    global should_exit
+    should_exit = True
 
 # ==================== MAIN ====================
 
@@ -462,11 +570,14 @@ async def main():
         
         logger.info("✅ Connected successfully!")
         print(f"{C.GREEN}✅ USERBOT ACTIVE - LISTENING FOR MESSAGES{C.RESET}\n")
+        print(f"{C.CYAN}Press Ctrl+C to gracefully shutdown{C.RESET}\n")
         
         # Start smart opening task
         smart_task = asyncio.create_task(smart_opening_task())
+        active_tasks.add(smart_task)
+        smart_task.add_done_callback(active_tasks.discard)
         
-        # Run until disconnected
+        # Run until disconnected or shutdown
         await client.run_until_disconnected()
     
     except KeyboardInterrupt:
@@ -480,15 +591,9 @@ async def main():
     finally:
         print_stats()
         logger.info("Bot shutdown")
-        print(f"{C.GREEN}✅ Bot shutdown{C.RESET}\n")
+        print(f"{C.GREEN}✅ Bot shutdown complete{C.RESET}\n")
 
 # ==================== ENTRY POINT ====================
-
-def signal_handler(signum, frame):
-    """Handle Ctrl+C"""
-    global should_exit
-    logger.warning("Received signal, shutting down...")
-    should_exit = True
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal_handler)
