@@ -1,11 +1,8 @@
 """
-Enhanced bot.py
-- Reads delay/rest/silence from .env
-- Loads/generates large fallback phrase pool at startup (>=5000)
-- Adds lightweight intent & sentiment analysis to pick relevant fallback
-- Uses fallback when Gemini fails or returns non-Indonesian
-- Keeps recent-response cache to avoid repeats
-- Writes clearer logs
+Enhanced bot.py (updated constraints)
+- Enforces replies to be exactly 2-3 words only (both AI and fallback)
+- Ensures fallback generator produces only 2-3 word phrases
+- Validation updated: Gemini outputs must be 2-3 words; otherwise retry -> fallback
 """
 
 import asyncio
@@ -33,11 +30,11 @@ TARGET_GROUP = os.getenv('TARGET_GROUP', 'interlinkIDchat')
 TOPIC_ID = int(os.getenv('INDONESIA_TOPIC_ID', '26251'))
 
 # Readable behavior config (from .env, with safe defaults)
-DELAY_MIN = int(os.getenv('REPLY_DELAY_MIN', os.getenv('REPLY_DELAY_MIN', '15')))
-DELAY_MAX = int(os.getenv('REPLY_DELAY_MAX', os.getenv('REPLY_DELAY_MAX', '30')))
-REST_MIN = int(os.getenv('REST_DURATION_MIN', os.getenv('REST_DURATION_MIN', '110')))
-REST_MAX = int(os.getenv('REST_DURATION_MAX', os.getenv('REST_DURATION_MAX', '130')))
-SILENCE = int(os.getenv('SILENCE_THRESHOLD', os.getenv('SILENCE_THRESHOLD', '60')))
+DELAY_MIN = int(os.getenv('REPLY_DELAY_MIN', '15'))
+DELAY_MAX = int(os.getenv('REPLY_DELAY_MAX', '30'))
+REST_MIN = int(os.getenv('REST_DURATION_MIN', '110'))
+REST_MAX = int(os.getenv('REST_DURATION_MAX', '130'))
+SILENCE = int(os.getenv('SILENCE_THRESHOLD', '60'))
 
 # Safety clamps
 if DELAY_MIN < 0: DELAY_MIN = 15
@@ -103,6 +100,11 @@ all_fallbacks = []
 recent_used = deque(maxlen=300)  # avoid recent repeats
 MIN_FALLBACK_POOL = 5000
 
+# Helper utils
+
+def count_words(text):
+    return len(text.split())
+
 # ==================== BANNER & UTIL ====================
 
 def print_banner():
@@ -121,10 +123,6 @@ def validate_config():
     if GEMINI_KEY == 'change_me' or not GEMINI_KEY:
         errors.append("GEMINI_API_KEY tidak dikonfigurasi")
     return errors
-
-
-def count_words(text):
-    return len(text.split())
 
 
 def get_uptime():
@@ -190,7 +188,6 @@ def detect_language(text):
         return False
     if any('\uAC00' <= c <= '\uD7AF' for c in text):
         return False
-    # Default to True if short and contains common Indonesian petty words
     return indo_count > 0
 
 # ==================== TOPIC ID DETECTION ====================
@@ -211,78 +208,98 @@ def get_message_topic_id(message):
 # ==================== FALLBACK GENERATION/LOADING ====================
 
 def generate_fallback_pool(target_total=MIN_FALLBACK_POOL):
-    """Generate a diverse Indonesian fallback pool programmatically and persist to disk."""
+    """Generate a diverse Indonesian fallback pool programmatically and persist to disk.
+    Ensure each phrase is 2-3 words only.
+    """
     os.makedirs('data', exist_ok=True)
     categories = {
         'agreement': {
             'prefix': ['', 'Haha', 'Wkwk', 'Iya', 'Bener', 'Setuju', 'Yup', 'Iya deh', 'Betul'],
-            'core': ['iya', 'bener', 'setuju', 'sama', 'benerr', 'sepakat', 'pas'],
-            'suffix': ['', 'banget', 'bro', 'siap', 'nih']
+            'core': ['iya', 'setuju', 'bener', 'betul', 'sama', 'sepakat', 'oke'],
+            'suffix': ['', 'banget', 'bro', 'nih']
         },
         'humor': {
             'prefix': ['Wkwk', 'Haha', 'Njir', 'Waduh', 'Hahaha', 'Ngakak'],
-            'core': ['kocak', 'gokil', 'gila', 'parah', 'absurd', 'licin'],
-            'suffix': ['', 'banget', 'bro', 'nih']
+            'core': ['kocak', 'gokil', 'gila', 'parah', 'konyol', 'absurd'],
+            'suffix': ['', 'banget', 'bro']
         },
         'question': {
             'prefix': ['', 'Eh', 'Woi', 'Asli'],
             'core': ['apa', 'gimana', 'kenapa', 'siapa', 'dimana', 'kapan', 'kok'],
-            'suffix': ['', 'nih', 'ya', '?']
+            'suffix': ['', 'nih', 'ya']
         },
         'support': {
-            'prefix': ['', 'Semangat', 'Kuat', 'Bisa kok', 'Sikat', 'Ayo'],
+            'prefix': ['', 'Semangat', 'Kuat', 'Bisa kok', 'Ayo', 'Sikat'],
             'core': ['bro', 'teman', 'sobat', 'kalian', 'kita'],
-            'suffix': ['', 'ya', '!']
+            'suffix': ['', 'ya']
         },
         'surprise': {
             'prefix': ['', 'Wah', 'Astaga', 'Waduh', 'Gila'],
-            'core': ['beneran', 'serius', 'kok bisa', 'lho', 'ga nyangka'],
+            'core': ['beneran', 'serius', 'lho', 'gak nyangka'],
             'suffix': ['', '!']
         },
         'opening': {
-            'prefix': ['', 'Woi', 'Halo', 'Yo', 'Gas', 'Siapa nih'],
-            'core': ['ada yang', 'apa kabar', 'ada ide', 'ada cerita', 'lagi apa'],
-            'suffix': ['', '?', 'nih']
+            'prefix': ['', 'Woi', 'Halo', 'Yo', 'Gas', 'Siapa'],
+            'core': ['ada', 'apa', 'ide', 'cerita', 'lagi'],
+            'suffix': ['', 'nih', '?']
         },
         'smalltalk': {
             'prefix': ['', 'Eh', 'Hmm', 'Hehe', 'Oh'],
-            'core': ['lagi', 'kemana', 'makan', 'kerja', 'nongkrong', 'libur'],
+            'core': ['lagi', 'makan', 'ngopi', 'kerja', 'libur', 'nongkrong'],
             'suffix': ['', 'ya', '?']
         }
     }
 
-    generated = {k: [] for k in categories}
-    per_cat = max(200, target_total // max(1, len(categories)))
+    generated = {k: set() for k in categories}
+    per_cat = max(300, target_total // max(1, len(categories)))
 
     for cat, parts in categories.items():
-        combos = set()
         attempts = 0
-        while len(combos) < per_cat and attempts < per_cat * 10:
+        while len(generated[cat]) < per_cat and attempts < per_cat * 20:
             p = random.choice(parts['prefix']).strip()
             c = random.choice(parts['core']).strip()
             s = random.choice(parts['suffix']).strip()
-            phrase = " ".join([x for x in [p, c, s] if x]).strip()
-            # Normalize spacing/punctuation
+            # Try forms that yield 2-3 words: (prefix core), (core suffix), (prefix core suffix)
+            forms = []
+            if p and c:
+                forms.append(f"{p} {c}".strip())
+            if c and s:
+                forms.append(f"{c} {s}".strip())
+            if p and c and s:
+                forms.append(f"{p} {c} {s}".strip())
+            if not forms:
+                attempts += 1
+                continue
+            phrase = random.choice(forms)
             phrase = phrase.replace(' ?', '?').replace(' !', '!').strip()
-            if phrase and len(phrase) < 80:
-                combos.add(phrase)
+            wc = count_words(phrase)
+            if 2 <= wc <= 3 and len(phrase) <= 60:
+                generated[cat].add(phrase)
             attempts += 1
-        generated[cat] = sorted(combos)
 
-    # Ensure we hit target_total by random combinations across categories
+    # Flatten and ensure total target
     all_phrases = []
-    for cat, lst in generated.items():
-        for p in lst:
+    for cat, s in generated.items():
+        for p in s:
             all_phrases.append({'category': cat, 'text': p})
 
-    # If not enough, expand by combining two short phrases
+    # If still not enough, expand by combining core two-words forms
+    core_pool = [item['text'] for item in all_phrases]
     while len(all_phrases) < target_total:
-        a = random.choice(all_phrases)['text'] if all_phrases else 'Iya'
-        b = random.choice(all_phrases)['text'] if all_phrases else 'Bro'
-        candidate = (a + ' ' + b).strip()
-        if len(candidate) > 80:
-            candidate = candidate[:80].rsplit(' ', 1)[0]
-        all_phrases.append({'category': 'mixed', 'text': candidate})
+        a = random.choice(core_pool) if core_pool else 'Iya bro'
+        b = random.choice(core_pool) if core_pool else 'Siap ya'
+        # try to merge into 2-3 words by picking parts
+        parts_a = a.split()
+        parts_b = b.split()
+        candidate_words = (parts_a + parts_b)[:3]
+        candidate = ' '.join(candidate_words)
+        if 2 <= count_words(candidate) <= 3 and candidate not in [x['text'] for x in all_phrases]:
+            all_phrases.append({'category': 'mixed', 'text': candidate})
+        else:
+            # fallback small generated variant
+            alternative = (a.split()[0] + ' ' + (b.split()[0] if len(b.split())>0 else 'ya')).strip()
+            if 2 <= count_words(alternative) <=3:
+                all_phrases.append({'category': 'mixed', 'text': alternative})
 
     # Persist to JSON grouped by category
     grouped = {}
@@ -312,6 +329,8 @@ def load_or_create_fallback():
     all_fallbacks = []
     for k, lst in fallback_by_category.items():
         all_fallbacks.extend(lst)
+    # Filter to 2-3 word phrases only (safety)
+    all_fallbacks = [p for p in all_fallbacks if 2 <= count_words(p) <= 3]
     random.shuffle(all_fallbacks)
     logger.info(f"Fallback pool loaded: {len(all_fallbacks)} phrases across {len(fallback_by_category)} categories")
 
@@ -332,30 +351,25 @@ NEGATIVE_WORDS = ['gak', 'tidak', 'nggak', 'gatau', 'ga', 'capek', 'bingung']
 
 
 def analyze_intent_and_tone(text, context_messages=None):
-    """Return best guess category intent (one of keys in fallback_by_category or 'neutral')"""
     txt = text.lower()
     scores = Counter()
     for intent, keys in INTENT_KEYWORDS.items():
         for k in keys:
             if k in txt:
                 scores[intent] += 1
-    # punctuation hint
     if '?' in text:
         scores['question'] += 1
-    # sentiment
     pos = sum(1 for w in POSITIVE_WORDS if w in txt)
     neg = sum(1 for w in NEGATIVE_WORDS if w in txt)
-    # context hint: check last messages for shared words
     if context_messages:
         combined = ' '.join(m['text'].lower() for m in context_messages[-5:])
         for k in INTENT_KEYWORDS.keys():
             if k in combined:
-                scores[k] += 0  # small bias could be added
+                scores[k] += 0
     if scores:
         intent = scores.most_common(1)[0][0]
         if intent in fallback_by_category:
             return intent
-    # fallback: if positive words -> agreement/support
     if pos > neg and pos > 0:
         return 'agreement' if 'agreement' in fallback_by_category else 'support'
     if neg > pos and neg > 0:
@@ -368,19 +382,20 @@ def select_fallback_for(text, context_messages=None):
     candidates = []
     if intent in fallback_by_category:
         candidates = list(fallback_by_category.get(intent, []))
-    # if small set or neutral, expand to all
     if not candidates:
         candidates = list(all_fallbacks)
-    # sample until not recently used
+    # Filter to 2-3 word phrases only
+    candidates = [p for p in candidates if 2 <= count_words(p) <= 3]
+    if not candidates:
+        candidates = [p for p in all_fallbacks if 2 <= count_words(p) <= 3]
     attempts = 0
-    while attempts < 30:
+    while attempts < 30 and candidates:
         choice = random.choice(candidates)
         if choice not in recent_used:
             recent_used.append(choice)
             return choice, intent
         attempts += 1
-    # fallback
-    choice = random.choice(candidates) if candidates else ('Iya', 'neutral')
+    choice = random.choice(candidates) if candidates else ('Iya bro', 'neutral')
     recent_used.append(choice)
     return choice, intent
 
@@ -404,11 +419,11 @@ def generate_ai_response(sender_name, user_text, context_messages=None, retry=0)
 
         system_prompt = (
             "Kamu adalah teman grup Indonesia yang responsive dan natural.\n"
-            "WAJIB HANYA Bahasa Indonesia, singkat (2-6 kata), natural. VARIASI.\n"
+            "WAJIB HANYA Bahasa Indonesia, SINGKAT: 2-3 KATA. VARIASI.\n"
             "Jangan ulang-ulang frasa yang sama terus."
         )
 
-        prompt = f"{context}{sender_name}: {user_text[:200]}\n\nBalas singkat (2-6 kata) yang natural dan relevan:"
+        prompt = f"{context}{sender_name}: {user_text[:200]}\n\nBalas singkat (2-3 kata) yang natural dan relevan:"
         logger.debug(f"🤖 Requesting Gemini (retry {retry})...")
 
         response = ai_client.models.generate_content(
@@ -417,7 +432,7 @@ def generate_ai_response(sender_name, user_text, context_messages=None, retry=0)
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 temperature=0.85,
-                max_output_tokens=40,
+                max_output_tokens=30,
                 top_p=0.95,
                 top_k=40,
                 timeout=10.0
@@ -433,17 +448,17 @@ def generate_ai_response(sender_name, user_text, context_messages=None, retry=0)
                 reply_text = reply_text.split(':', 1)[1].strip()
             word_count = count_words(reply_text)
             logger.debug(f"Gemini returned ({word_count} words): {reply_text}")
-            # Validate Indonesian & length
+            # Validate Indonesian & length: enforce 2-3 words
             if not detect_language(reply_text):
                 logger.warning("Gemini returned non-Indonesian text — retrying with AI")
                 stats['ai_errors'] += 1
                 time.sleep(1)
                 return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
-            if 1 <= word_count <= 12 and len(reply_text) < 140:
+            if 2 <= word_count <= 3 and len(reply_text) < 140:
                 logger.info(f"✅ [GEMINI] {sender_name}: '{reply_text}'")
                 return reply_text, False, 'GEMINI'
             else:
-                logger.warning(f"Gemini output length invalid (words={word_count}) — retrying")
+                logger.warning(f"Gemini output invalid (words={word_count}) — retrying")
                 stats['ai_errors'] += 1
                 time.sleep(1)
                 return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
@@ -623,23 +638,21 @@ async def smart_open():
     try:
         if should_exit:
             return
-        # pick an opening based on recent conversation keywords
         opening = None
         if len(message_queue) >= 1:
-            # look at last up to 3 messages
             ctx = message_queue[-3:]
             words = ' '.join(m['text'] for m in ctx).lower().split()
-            # choose a word that is non-stop and common
             common = Counter([w for w in words if len(w) > 2])
             if common:
                 keyword = common.most_common(1)[0][0]
-                # prefer opening that contains keyword
-                candidates = [p for p in all_fallbacks if keyword in p]
+                candidates = [p for p in all_fallbacks if keyword in p and 2 <= count_words(p) <= 3]
                 if candidates:
                     opening = random.choice(candidates)
         if not opening:
             opening, cat = select_fallback_for('opening')
-        # send opening
+            # ensure 2-3 words
+            if 2 > count_words(opening) or count_words(opening) > 3:
+                opening, cat = select_fallback_for('opening')
         await client.send_message(TARGET_GROUP, opening, reply_to=TOPIC_ID)
         print(f"{C.GREEN}📢 [SELF-CHAT] {opening}{C.RESET}\n")
         logger.info(f"[SELF-CHAT] Sent: {opening}")
@@ -688,7 +701,6 @@ async def main():
             print(f"   {C.RED}✗ {e}{C.RESET}")
         sys.exit(1)
 
-    # load/generate fallback pool
     load_or_create_fallback()
 
     logger.info("BOT STARTING - PRIORITAS GEMINI AI")
