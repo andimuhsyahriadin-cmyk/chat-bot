@@ -422,4 +422,321 @@ def generate_ai_response(sender_name, user_text, context_messages=None, retry=0)
             "Jangan ulang-ulang frasa yang sama terus."
         )
 
-        prompt = f"{context}{sender_name}: {user_text[:200]}\n\nBalas singkat (2-3 kata) yang natural dan relevan:
+        prompt = f"""{context}{sender_name}: {user_text[:200]}
+
+Balas singkat (2-3 kata) yang natural dan relevan:"""
+
+        logger.debug(f"🤖 Requesting Gemini (retry {retry})...")
+
+        response = ai_client.models.generate_content(
+            model='gemini-3.1-flash-lite',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                temperature=0.85,
+                max_output_tokens=30,
+                top_p=0.95,
+                top_k=40,
+                timeout=10.0
+            )
+        )
+
+        if response and getattr(response, 'text', None):
+            reply_text = response.text.strip()
+            reply_text = reply_text.replace('**', '').replace('__', '').replace('```', '')
+            reply_text = reply_text.replace('"', '').replace("'", '').strip()
+            reply_text = ' '.join(reply_text.split())
+            if reply_text.startswith('Balas:') or reply_text.startswith('Reply:'):
+                reply_text = reply_text.split(':', 1)[1].strip()
+            word_count = count_words(reply_text)
+            logger.debug(f"Gemini returned ({word_count} words): {reply_text}")
+            # Validate Indonesian & length: enforce 2-3 words
+            if not detect_language(reply_text):
+                logger.warning("Gemini returned non-Indonesian text — retrying with AI")
+                stats['ai_errors'] += 1
+                time.sleep(1)
+                return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
+            if 2 <= word_count <= 3 and len(reply_text) < 140:
+                logger.info(f"✅ [GEMINI] {sender_name}: '{reply_text}'")
+                return reply_text, False, 'GEMINI'
+            else:
+                logger.warning(f"Gemini output invalid (words={word_count}) — retrying")
+                stats['ai_errors'] += 1
+                time.sleep(1)
+                return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
+        else:
+            logger.warning("Empty response from Gemini — retrying")
+            stats['ai_errors'] += 1
+            time.sleep(1)
+            return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
+
+    except Exception as e:
+        error_msg = str(e)
+        logger.warning(f"Gemini error (attempt {retry+1}): {error_msg[:120]}")
+        if any(x in error_msg.lower() for x in ['500', '503', 'timeout', 'deadline', 'temporarily', 'rate limit', 'unauth']):
+            stats['ai_errors'] += 1
+            time.sleep(2 + retry)
+            return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
+        logger.error(f"Gemini failed: {error_msg[:200]}")
+        stats['errors'] += 1
+
+    # final fallback
+    logger.warning("Using fallback pool due to Gemini failure")
+    fallback, cat = select_fallback_for(user_text, context_messages)
+    return fallback, True, f"FALLBACK:{cat}"
+
+# ==================== MESSAGE HANDLING ====================
+
+@client.on(events.NewMessage(chats=TARGET_GROUP))
+async def handle_message(event):
+    global message_queue, last_activity, is_processing, last_cycle_time
+    try:
+        if getattr(event.message, 'out', False):
+            return
+        topic_id = get_message_topic_id(event.message)
+        if topic_id != TOPIC_ID:
+            logger.debug(f"Skipped: Wrong topic {topic_id} (should be {TOPIC_ID})")
+            stats['messages_skipped'] += 1
+            return
+        sender = await event.get_sender()
+        if not sender or sender.bot:
+            stats['messages_skipped'] += 1
+            return
+        sender_name = sender.first_name or 'Unknown'
+        user_text = event.message.text or ''
+        if not user_text or len(user_text.strip()) < 3:
+            stats['messages_skipped'] += 1
+            return
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        print(f"{C.YELLOW}[{timestamp}] {C.BOLD}{sender_name}{C.RESET}: {user_text}")
+        if not detect_language(user_text):
+            print(f"   {C.RED}└─ 🚫 Skip (non-Indonesian){C.RESET}")
+            logger.info(f"Skipped non-Indonesian from {sender_name}")
+            stats['messages_skipped'] += 1
+            return
+        if should_skip_keywords(user_text):
+            print(f"   {C.CYAN}└─ ⏭️  Skip (keyword filter){C.RESET}")
+            stats['messages_skipped'] += 1
+            return
+        stats['messages_received'] += 1
+        last_activity = datetime.now()
+        message_queue.append({
+            'sender_id': sender.id,
+            'sender_name': sender_name,
+            'text': user_text,
+            'event': event,
+            'timestamp': datetime.now()
+        })
+        queue_size = len(message_queue)
+        print(f"   {C.MAGENTA}└─ 📦 Queue: {queue_size}/3 (Topic: #{TOPIC_ID}){C.RESET}")
+        current_time = datetime.now()
+        time_since_last_cycle = (current_time - last_cycle_time).total_seconds()
+        if queue_size >= 3 and not is_processing and time_since_last_cycle > 5:
+            asyncio.create_task(start_reply_cycle())
+    except Exception as e:
+        logger.error(f"Error handling message: {e}")
+        stats['errors'] += 1
+
+# ==================== REPLY CYCLE LOGIC ====================
+
+async def start_reply_cycle():
+    global is_processing, message_queue, last_activity, last_cycle_time
+    if is_processing or len(message_queue) < 3:
+        return
+    is_processing = True
+    last_cycle_time = datetime.now()
+    try:
+        selected = message_queue[:3]
+        print(f"\n{C.BOLD}{C.BLUE}{'='*80}{C.RESET}")
+        print(f"{C.BOLD}🤖 CYCLE: Balas 3 Messages (GEMINI AI)🇮🇩{C.RESET}")
+        print(f"{C.BOLD}{C.BLUE}{'='*80}{C.RESET}\n")
+        context_for_ai = []
+        for msg in message_queue:
+            context_for_ai.append({'sender': msg['sender_name'], 'text': msg['text']})
+        for idx, msg in enumerate(selected, 1):
+            if should_exit:
+                print(f"{C.YELLOW}[EXIT] Stopping cycle...{C.RESET}")
+                break
+            sender_name = msg['sender_name']
+            user_text = msg['text']
+            event = msg['event']
+            try:
+                reply_text, is_fallback, source = generate_ai_response(
+                    sender_name, user_text, context_for_ai
+                )
+                if not is_fallback:
+                    stats['ai_replies'] += 1
+                else:
+                    stats['fallback_replies'] += 1
+                delay = random.randint(DELAY_MIN, DELAY_MAX)
+                source_emoji = '🤖' if source == 'GEMINI' else '📚'
+                print(f"   {C.CYAN}└─ {source_emoji}[{source}] Reply (delay {delay}s){C.RESET}")
+                try:
+                    async with client.action(TARGET_GROUP, 'typing'):
+                        for _ in range(delay):
+                            if should_exit:
+                                break
+                            await asyncio.sleep(1)
+                except:
+                    for _ in range(delay):
+                        if should_exit:
+                            break
+                        await asyncio.sleep(1)
+                if not should_exit:
+                    try:
+                        await event.reply(reply_text)
+                    except Exception as send_error:
+                        logger.warning(f"Reply failed: {send_error}")
+                        try:
+                            await client.send_message(TARGET_GROUP, reply_text, reply_to=TOPIC_ID)
+                        except Exception as fallback_error:
+                            logger.error(f"Send failed: {fallback_error}")
+                            raise
+                    print(f"   {C.GREEN}└─ ✅ Sent: {reply_text}{C.RESET}")
+                    stats['messages_replied'] += 1
+                    last_activity = datetime.now()
+                    logger.info(f"[{source}] Balas ke {sender_name}: {reply_text}")
+            except Exception as e:
+                logger.error(f"Error replying to {sender_name}: {e}")
+                stats['errors'] += 1
+                continue
+        if should_exit:
+            return
+        for msg in selected:
+            if msg in message_queue:
+                message_queue.remove(msg)
+        print(f"\n{C.BOLD}{C.BLUE}{'='*80}{C.RESET}")
+        print(f"{C.GREEN}✅ CYCLE COMPLETE{C.RESET}")
+        print(f"{C.BOLD}{C.BLUE}{'='*80}{C.RESET}\n")
+        stats['cycles_completed'] += 1
+        rest_duration = random.randint(REST_MIN, REST_MAX)
+        minutes = rest_duration // 60
+        seconds = rest_duration % 60
+        print(f"{C.YELLOW}⏸️  REST {minutes}m {seconds}s (Ctrl+C exit){C.RESET}")
+        for _ in range(rest_duration):
+            if should_exit:
+                print(f"{C.YELLOW}[EXIT] Rest interrupted{C.RESET}\n")
+                break
+            await asyncio.sleep(1)
+        if not should_exit:
+            print(f"{C.GREEN}🌅 WOKE UP{C.RESET}\n")
+            if len(message_queue) >= 3:
+                print(f"{C.CYAN}Queue ada, cycle baru...{C.RESET}")
+                await start_reply_cycle()
+            else:
+                time_silent = (datetime.now() - last_activity).total_seconds()
+                if time_silent > SILENCE:
+                    print(f"{C.YELLOW}[SMART OPEN] Sepi {int(time_silent)}s, buka chat...{C.RESET}")
+                    await smart_open()
+    except Exception as e:
+        logger.error(f"Error in reply cycle: {e}")
+        stats['errors'] += 1
+    finally:
+        is_processing = False
+
+# ==================== SMART OPENING ====================
+
+async def smart_open():
+    try:
+        if should_exit:
+            return
+        opening = None
+        if len(message_queue) >= 1:
+            ctx = message_queue[-3:]
+            words = ' '.join(m['text'] for m in ctx).lower().split()
+            common = Counter([w for w in words if len(w) > 2])
+            if common:
+                keyword = common.most_common(1)[0][0]
+                candidates = [p for p in all_fallbacks if keyword in p and 2 <= count_words(p) <= 3]
+                if candidates:
+                    opening = random.choice(candidates)
+        if not opening:
+            opening, cat = select_fallback_for('opening')
+            if 2 > count_words(opening) or count_words(opening) > 3:
+                opening, cat = select_fallback_for('opening')
+        await client.send_message(TARGET_GROUP, opening, reply_to=TOPIC_ID)
+        print(f"{C.GREEN}📢 [SELF-CHAT] {opening}{C.RESET}\n")
+        logger.info(f"[SELF-CHAT] Sent: {opening}")
+        global last_activity
+        last_activity = datetime.now()
+        stats['self_chats'] += 1
+    except Exception as e:
+        logger.error(f"Self chat failed: {e}")
+
+async def smart_opening_task():
+    while not should_exit:
+        try:
+            for _ in range(2):
+                if should_exit:
+                    break
+                await asyncio.sleep(1)
+            if should_exit:
+                break
+            if len(message_queue) >= 3 and not is_processing:
+                asyncio.create_task(start_reply_cycle())
+            time_silent = (datetime.now() - last_activity).total_seconds()
+            if time_silent > SILENCE and not is_processing and len(message_queue) == 0:
+                asyncio.create_task(smart_open())
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Task error: {e}")
+
+# ==================== SIGNAL HANDLING ====================
+
+def signal_handler(signum, frame):
+    global should_exit
+    logger.warning(f"Signal {signum} - instant shutdown...")
+    print(f"\n{C.RED}🛑 INSTANT EXIT{C.RESET}\n")
+    should_exit = True
+    sys.exit(0)
+
+# ==================== MAIN ====================
+
+async def main():
+    print_banner()
+    errors = validate_config()
+    if errors:
+        print(f"{C.RED}❌ CONFIG ERRORS:{C.RESET}")
+        for e in errors:
+            print(f"   {C.RED}✗ {e}{C.RESET}")
+        sys.exit(1)
+
+    load_or_create_fallback()
+
+    logger.info("BOT STARTING - PRIORITAS GEMINI AI")
+    logger.info(f"Target: {TARGET_GROUP} | Topic: #{TOPIC_ID}")
+    logger.info("Model: Gemini 3.1 Flash-Lite (PRIMARY)")
+    logger.info("Fallback: Generated pool (EMERGENCY ONLY)")
+
+    try:
+        print(f"{C.GREEN}🔌 Connecting to Telegram...{C.RESET}")
+        await client.start()
+        logger.info("✅ Connected successfully!")
+        print(f"{C.GREEN}✅ USERBOT ACTIVE - GEMINI AI MODE 🤖🇮🇩{C.RESET}\n")
+        smart_task = asyncio.create_task(smart_opening_task())
+        await client.run_until_disconnected()
+    except KeyboardInterrupt:
+        logger.warning("Interrupted by user")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        print(f"{C.RED}❌ Error: {e}{C.RESET}")
+    finally:
+        print_stats()
+        logger.info("Bot shutdown")
+        print(f"{C.GREEN}✅ Shutdown complete{C.RESET}\n")
+
+# ==================== ENTRY POINT ====================
+
+if __name__ == '__main__':
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    try:
+        with client:
+            client.loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        print(f"{C.RED}🛑 EXIT{C.RESET}\n")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        print(f"{C.RED}❌ Fatal: {e}{C.RESET}")
