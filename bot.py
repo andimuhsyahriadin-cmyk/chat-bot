@@ -1,7 +1,11 @@
 """
-TELEGRAM USERBOT DENGAN GEMINI 3.1 FLASH-LITE AI - INDONESIA FOKUS
-Single file complete bot - ready untuk Termux
-IMPROVED: PRIORITAS GEMINI AI 100% - Database hanya FALLBACK EMERGENCY
+Enhanced bot.py
+- Reads delay/rest/silence from .env
+- Loads/generates large fallback phrase pool at startup (>=5000)
+- Adds lightweight intent & sentiment analysis to pick relevant fallback
+- Uses fallback when Gemini fails or returns non-Indonesian
+- Keeps recent-response cache to avoid repeats
+- Writes clearer logs
 """
 
 import asyncio
@@ -11,7 +15,9 @@ import sys
 import os
 import logging
 import time
+import json
 from datetime import datetime, timedelta
+from collections import deque, Counter
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from google import genai
@@ -26,12 +32,19 @@ GEMINI_KEY = os.getenv('GEMINI_API_KEY', 'change_me')
 TARGET_GROUP = os.getenv('TARGET_GROUP', 'interlinkIDchat')
 TOPIC_ID = int(os.getenv('INDONESIA_TOPIC_ID', '26251'))
 
-# Bot behavior
-DELAY_MIN = 15
-DELAY_MAX = 30
-REST_MIN = 110
-REST_MAX = 130
-SILENCE = 60
+# Readable behavior config (from .env, with safe defaults)
+DELAY_MIN = int(os.getenv('REPLY_DELAY_MIN', os.getenv('REPLY_DELAY_MIN', '15')))
+DELAY_MAX = int(os.getenv('REPLY_DELAY_MAX', os.getenv('REPLY_DELAY_MAX', '30')))
+REST_MIN = int(os.getenv('REST_DURATION_MIN', os.getenv('REST_DURATION_MIN', '110')))
+REST_MAX = int(os.getenv('REST_DURATION_MAX', os.getenv('REST_DURATION_MAX', '130')))
+SILENCE = int(os.getenv('SILENCE_THRESHOLD', os.getenv('SILENCE_THRESHOLD', '60')))
+
+# Safety clamps
+if DELAY_MIN < 0: DELAY_MIN = 15
+if DELAY_MAX < DELAY_MIN: DELAY_MAX = DELAY_MIN + 1
+if REST_MIN < 10: REST_MIN = 110
+if REST_MAX < REST_MIN: REST_MAX = REST_MIN + 10
+if SILENCE < 5: SILENCE = 60
 
 # ==================== COLORS ====================
 class C:
@@ -83,77 +96,46 @@ stats = {
 # Skip keywords
 SKIP_KEYWORDS = ['admin', 'moderator', 'warning', '[bot]', 'report', 'spam', 'banned', 'kick', 'mute']
 
-# ==================== FALLBACK POOL (EMERGENCY ONLY) ====================
-# Ini HANYA untuk jika Gemini API completely down/unavailable
+# Fallback management
+FALLBACK_PATH = os.path.join('data', 'fallback_phrases.json')
+fallback_by_category = {}
+all_fallbacks = []
+recent_used = deque(maxlen=300)  # avoid recent repeats
+MIN_FALLBACK_POOL = 5000
 
-FALLBACK_RESPONSES = [
-    # AGREEMENT
-    "Haha iya", "Wkwk bener", "Bet bro", "Iyah deh", "Setuju banget",
-    "Sama sih", "True true", "Hehe iya", "Okayy bro", "Bener banget",
-    
-    # HUMOR
-    "Njir kocak", "Wkwk gila", "Gila banget", "Kocak parah", "Gokil bro",
-    "Lucu banget", "Ngakak bro", "Wkwk asli", "Haha ngakak", "Parah ini",
-    
-    # SURPRISE
-    "Waduh bro", "Asli gak?", "Beneran nih?", "Serius bro?", "Kok bisa?",
-    "Gimana ini?", "Wah wah", "Astaga", "Sumpah bro?", "Apa nih?",
-    
-    # QUESTION
-    "Apa sih?", "Gimana?", "Siapa itu?", "Cerita dong", "Lanjut", "Terus apa?",
-    "Trus?", "Gimana nih?", "Apa dong?", "Info dong",
-    
-    # SUPPORT
-    "Kuat bro", "Semangat", "Bisa kok", "Yakin bisa", "Go go", "Push terus",
-    "Ayuuu", "Semangat teman", "Pasti bisa", "Sukses bro",
-    
-    # OPENING (self-chat)
-    "Woi sepi banget", "Gimana kabar bro?", "Ada yang seru?", "Gas ngobrol",
-    "Ayo dong lanjut", "Siapa punya ide?", "Cerita donk temen", "Gas lah bro",
-]
-
-# ==================== COLORS ====================
+# ==================== BANNER & UTIL ====================
 
 def print_banner():
-    """Print bot banner"""
     print(f"\n{C.CYAN}{C.BOLD}" + "="*80)
     print(f"        🤖 TELEGRAM USERBOT DENGAN GEMINI 3.1 FLASH-LITE AI 🇮🇩")
     print(f"        PRIORITAS GEMINI API 100% • Fallback DB EMERGENCY ONLY")
     print(f"="*80 + f"{C.RESET}\n")
 
+
 def validate_config():
-    """Validate config"""
     errors = []
     if API_ID == 0:
         errors.append("TELEGRAM_API_ID tidak dikonfigurasi")
     if API_HASH == 'change_me':
         errors.append("TELEGRAM_API_HASH tidak dikonfigurasi")
-    if GEMINI_KEY == 'change_me':
+    if GEMINI_KEY == 'change_me' or not GEMINI_KEY:
         errors.append("GEMINI_API_KEY tidak dikonfigurasi")
     return errors
 
-def should_skip_keywords(text):
-    """Check skip keywords"""
-    text_lower = text.lower()
-    for keyword in SKIP_KEYWORDS:
-        if keyword.lower() in text_lower:
-            return True
-    return False
 
 def count_words(text):
-    """Count words in text"""
     return len(text.split())
 
+
 def get_uptime():
-    """Get uptime"""
     uptime = datetime.now() - stats['start_time']
     days = uptime.days
     hours, remainder = divmod(uptime.seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{days}d {hours}h {minutes}m {seconds}s"
 
+
 def print_stats():
-    """Print statistics"""
     uptime = get_uptime()
     received = stats['messages_received']
     replied = stats['messages_replied']
@@ -181,7 +163,7 @@ def print_stats():
 # ==================== LANGUAGE DETECTION ====================
 
 def detect_language(text):
-    """Detect if text is Indonesian"""
+    """Simple heuristic to detect if text likely Indonesian"""
     indonesian_words = [
         'apa', 'siapa', 'dimana', 'kapan', 'bagaimana', 'kenapa', 'berapa',
         'ya', 'yah', 'yaudah', 'lah', 'dong', 'sih', 'kali', 'nih', 'tuh',
@@ -191,205 +173,336 @@ def detect_language(text):
         'bro', 'mas', 'bang', 'kak', 'dek', 'om', 'mbak', 'pak', 'ibu', 'ente',
         'aja', 'udah', 'gak', 'ga', 'ngga', 'nggak', 'enggak', 'gakk',
         'gimana', 'gini', 'gitu', 'cuman', 'wkwk', 'haha', 'hehe', 'njir',
-        'be', 'bet', 'lo', 'gue', 'elu', 'klo', 'yang', 'sih', 'kok', 'soal'
+        'lo', 'gue', 'elu', 'klo', 'yang', 'sih', 'kok', 'soal'
     ]
     
     text_lower = text.lower()
     words = text_lower.split()
-    indo_count = sum(1 for word in words if any(indo_word in word.lower() for indo_word in indonesian_words))
-    
-    if len(words) > 0 and indo_count / len(words) > 0.25:
+    if not words:
+        return False
+    indo_count = sum(1 for word in words if any(indo_word in word for indo_word in indonesian_words))
+    if indo_count / len(words) > 0.22:
         return True
-    
+    # Check for other script presence (Arabic, Cyrillic, CJK)
     if any('\u0600' <= c <= '\u06FF' for c in text) or any('\u0400' <= c <= '\u04FF' for c in text):
         return False
     if any('\u4E00' <= c <= '\u9FFF' for c in text) or any('\u3040' <= c <= '\u309F' for c in text):
         return False
     if any('\uAC00' <= c <= '\uD7AF' for c in text):
         return False
-    
-    return True
+    # Default to True if short and contains common Indonesian petty words
+    return indo_count > 0
 
 # ==================== TOPIC ID DETECTION ====================
 
 def get_message_topic_id(message):
-    """Extract topic ID from message correctly"""
     try:
         if message.reply_to and hasattr(message.reply_to, 'reply_to_top_id'):
             return message.reply_to.reply_to_top_id
-        
         if hasattr(message, 'topic_id') and message.topic_id:
             return message.topic_id
-        
         if hasattr(message, 'forum_topic') and message.forum_topic:
             return message.forum_topic
-        
         return None
-    
     except Exception as e:
         logger.debug(f"Error extracting topic_id: {e}")
         return None
 
+# ==================== FALLBACK GENERATION/LOADING ====================
+
+def generate_fallback_pool(target_total=MIN_FALLBACK_POOL):
+    """Generate a diverse Indonesian fallback pool programmatically and persist to disk."""
+    os.makedirs('data', exist_ok=True)
+    categories = {
+        'agreement': {
+            'prefix': ['', 'Haha', 'Wkwk', 'Iya', 'Bener', 'Setuju', 'Yup', 'Iya deh', 'Betul'],
+            'core': ['iya', 'bener', 'setuju', 'sama', 'benerr', 'sepakat', 'pas'],
+            'suffix': ['', 'banget', 'bro', 'siap', 'nih']
+        },
+        'humor': {
+            'prefix': ['Wkwk', 'Haha', 'Njir', 'Waduh', 'Hahaha', 'Ngakak'],
+            'core': ['kocak', 'gokil', 'gila', 'parah', 'absurd', 'licin'],
+            'suffix': ['', 'banget', 'bro', 'nih']
+        },
+        'question': {
+            'prefix': ['', 'Eh', 'Woi', 'Asli'],
+            'core': ['apa', 'gimana', 'kenapa', 'siapa', 'dimana', 'kapan', 'kok'],
+            'suffix': ['', 'nih', 'ya', '?']
+        },
+        'support': {
+            'prefix': ['', 'Semangat', 'Kuat', 'Bisa kok', 'Sikat', 'Ayo'],
+            'core': ['bro', 'teman', 'sobat', 'kalian', 'kita'],
+            'suffix': ['', 'ya', '!']
+        },
+        'surprise': {
+            'prefix': ['', 'Wah', 'Astaga', 'Waduh', 'Gila'],
+            'core': ['beneran', 'serius', 'kok bisa', 'lho', 'ga nyangka'],
+            'suffix': ['', '!']
+        },
+        'opening': {
+            'prefix': ['', 'Woi', 'Halo', 'Yo', 'Gas', 'Siapa nih'],
+            'core': ['ada yang', 'apa kabar', 'ada ide', 'ada cerita', 'lagi apa'],
+            'suffix': ['', '?', 'nih']
+        },
+        'smalltalk': {
+            'prefix': ['', 'Eh', 'Hmm', 'Hehe', 'Oh'],
+            'core': ['lagi', 'kemana', 'makan', 'kerja', 'nongkrong', 'libur'],
+            'suffix': ['', 'ya', '?']
+        }
+    }
+
+    generated = {k: [] for k in categories}
+    per_cat = max(200, target_total // max(1, len(categories)))
+
+    for cat, parts in categories.items():
+        combos = set()
+        attempts = 0
+        while len(combos) < per_cat and attempts < per_cat * 10:
+            p = random.choice(parts['prefix']).strip()
+            c = random.choice(parts['core']).strip()
+            s = random.choice(parts['suffix']).strip()
+            phrase = " ".join([x for x in [p, c, s] if x]).strip()
+            # Normalize spacing/punctuation
+            phrase = phrase.replace(' ?', '?').replace(' !', '!').strip()
+            if phrase and len(phrase) < 80:
+                combos.add(phrase)
+            attempts += 1
+        generated[cat] = sorted(combos)
+
+    # Ensure we hit target_total by random combinations across categories
+    all_phrases = []
+    for cat, lst in generated.items():
+        for p in lst:
+            all_phrases.append({'category': cat, 'text': p})
+
+    # If not enough, expand by combining two short phrases
+    while len(all_phrases) < target_total:
+        a = random.choice(all_phrases)['text'] if all_phrases else 'Iya'
+        b = random.choice(all_phrases)['text'] if all_phrases else 'Bro'
+        candidate = (a + ' ' + b).strip()
+        if len(candidate) > 80:
+            candidate = candidate[:80].rsplit(' ', 1)[0]
+        all_phrases.append({'category': 'mixed', 'text': candidate})
+
+    # Persist to JSON grouped by category
+    grouped = {}
+    for item in all_phrases:
+        grouped.setdefault(item['category'], []).append(item['text'])
+
+    with open(FALLBACK_PATH, 'w', encoding='utf-8') as f:
+        json.dump(grouped, f, ensure_ascii=False, indent=2)
+
+    return grouped
+
+
+def load_or_create_fallback():
+    global fallback_by_category, all_fallbacks
+    if os.path.exists(FALLBACK_PATH):
+        try:
+            with open(FALLBACK_PATH, 'r', encoding='utf-8') as f:
+                fallback_by_category = json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load fallback file, regenerating: {e}")
+            fallback_by_category = generate_fallback_pool(MIN_FALLBACK_POOL)
+    else:
+        logger.info("Fallback file not found — generating large pool (this may take a few seconds)...")
+        fallback_by_category = generate_fallback_pool(MIN_FALLBACK_POOL)
+
+    # flatten
+    all_fallbacks = []
+    for k, lst in fallback_by_category.items():
+        all_fallbacks.extend(lst)
+    random.shuffle(all_fallbacks)
+    logger.info(f"Fallback pool loaded: {len(all_fallbacks)} phrases across {len(fallback_by_category)} categories")
+
+# ==================== INTENT & SENTIMENT (LIGHTWEIGHT) ====================
+
+INTENT_KEYWORDS = {
+    'question': ['apa', 'kenapa', 'gimana', 'gak', 'kok', 'siapa', 'dimana', 'kapan', '?'],
+    'agreement': ['setuju', 'iya', 'betul', 'bener', 'sepakat', 'sama', 'yup', 'yoi'],
+    'humor': ['wkwk', 'haha', 'ngakak', 'kocak', 'gokil', 'konyol'],
+    'support': ['semangat', 'sukses', 'bisa', 'kuat', 'ayo'],
+    'surprise': ['astaga', 'waduh', 'woi', 'lho', 'serius'],
+    'opening': ['halo', 'woi', 'gas', 'siapa'],
+    'smalltalk': ['lagi', 'makan', 'ngopi', 'libur', 'kerja']
+}
+
+POSITIVE_WORDS = ['baik', 'bagus', 'mantap', 'oke', 'ok', 'siap', 'ya', 'iya', 'betul']
+NEGATIVE_WORDS = ['gak', 'tidak', 'nggak', 'gatau', 'ga', 'capek', 'bingung']
+
+
+def analyze_intent_and_tone(text, context_messages=None):
+    """Return best guess category intent (one of keys in fallback_by_category or 'neutral')"""
+    txt = text.lower()
+    scores = Counter()
+    for intent, keys in INTENT_KEYWORDS.items():
+        for k in keys:
+            if k in txt:
+                scores[intent] += 1
+    # punctuation hint
+    if '?' in text:
+        scores['question'] += 1
+    # sentiment
+    pos = sum(1 for w in POSITIVE_WORDS if w in txt)
+    neg = sum(1 for w in NEGATIVE_WORDS if w in txt)
+    # context hint: check last messages for shared words
+    if context_messages:
+        combined = ' '.join(m['text'].lower() for m in context_messages[-5:])
+        for k in INTENT_KEYWORDS.keys():
+            if k in combined:
+                scores[k] += 0  # small bias could be added
+    if scores:
+        intent = scores.most_common(1)[0][0]
+        if intent in fallback_by_category:
+            return intent
+    # fallback: if positive words -> agreement/support
+    if pos > neg and pos > 0:
+        return 'agreement' if 'agreement' in fallback_by_category else 'support'
+    if neg > pos and neg > 0:
+        return 'support' if 'support' in fallback_by_category else 'neutral'
+    return 'neutral'
+
+
+def select_fallback_for(text, context_messages=None):
+    intent = analyze_intent_and_tone(text, context_messages)
+    candidates = []
+    if intent in fallback_by_category:
+        candidates = list(fallback_by_category.get(intent, []))
+    # if small set or neutral, expand to all
+    if not candidates:
+        candidates = list(all_fallbacks)
+    # sample until not recently used
+    attempts = 0
+    while attempts < 30:
+        choice = random.choice(candidates)
+        if choice not in recent_used:
+            recent_used.append(choice)
+            return choice, intent
+        attempts += 1
+    # fallback
+    choice = random.choice(candidates) if candidates else ('Iya', 'neutral')
+    recent_used.append(choice)
+    return choice, intent
+
 # ==================== AI ENGINE - GEMINI FOKUS ====================
 
 def generate_ai_response(sender_name, user_text, context_messages=None, retry=0):
-    """
-    🤖 GENERATE VIA GEMINI AI
-    Fallback HANYA jika Gemini completely down/unavailable
-    """
     if retry > 3:
-        logger.warning(f"AI failed 3x, using fallback DB")
-        fallback = random.choice(FALLBACK_RESPONSES)
-        return fallback, True, "FALLBACK"
-    
+        logger.warning(f"AI failed {retry}x, selecting fallback by analysis")
+        fallback, cat = select_fallback_for(user_text, context_messages)
+        return fallback, True, f"FALLBACK:{cat}"
+
     try:
-        # Build context
-        context = ""
+        context = ''
         if context_messages and len(context_messages) > 0:
-            recent = context_messages[-3:] if len(context_messages) >= 3 else context_messages
-            context = "Chat context:\n"
+            recent = context_messages[-4:]
+            context = 'Chat context:\n'
             for msg in recent:
-                short_text = msg['text'][:50]
+                short_text = msg['text'][:80]
                 context += f"{msg['sender']}: {short_text}\n"
-            context += "\n"
-        
-        # System prompt - ENFORCE GEMINI USAGE
-        system_prompt = f"""Kamu adalah teman grup Indonesia yang responsive dan natural.
-WAJIB HANYA Bahasa Indonesia dengan 2-3 KATA MAKSIMAL.
-Balas natural sesuai konteks - varied, no repetition.
-CONTOH JAWABAN:
-- Jika user setuju: "Haha iya", "Bener banget", "Setuju"
-- Jika user lucu: "Njir kocak", "Wkwk gila", "Gokil"
-- Jika user tanya: "Apa sih?", "Gimana?", "Cerita dong"
-- Jika user support: "Semangat", "Kuat bro", "Bisa kok"
-- Jika user heran: "Asli gak?", "Waduh", "Kok bisa?"
-JANGAN MONOTON! VARIASIKAN JAWABAN! Tidak boleh selalu "gas".
-Hanya 2-3 KATA! Tidak lebih!"""
+            context += '\n'
 
-        prompt = f"""{context}{sender_name}: {user_text[:80]}
+        system_prompt = (
+            "Kamu adalah teman grup Indonesia yang responsive dan natural.\n"
+            "WAJIB HANYA Bahasa Indonesia, singkat (2-6 kata), natural. VARIASI.\n"
+            "Jangan ulang-ulang frasa yang sama terus."
+        )
 
-Balas singkat (2-3 kata) yang natural dan diverse:"""
+        prompt = f"{context}{sender_name}: {user_text[:200]}\n\nBalas singkat (2-6 kata) yang natural dan relevan:"
+        logger.debug(f"🤖 Requesting Gemini (retry {retry})...")
 
-        logger.debug(f"🤖 [Retry {retry}] Requesting Gemini...")
-        
-        # Call Gemini dengan timeout
         response = ai_client.models.generate_content(
             model='gemini-3.1-flash-lite',
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 temperature=0.85,
-                max_output_tokens=25,
+                max_output_tokens=40,
                 top_p=0.95,
-                top_k=20,
-                timeout=10.0  # 10 detik timeout
+                top_k=40,
+                timeout=10.0
             )
         )
-        
-        if response and response.text:
+
+        if response and getattr(response, 'text', None):
             reply_text = response.text.strip()
-            
-            # Cleanup
             reply_text = reply_text.replace('**', '').replace('__', '').replace('```', '')
             reply_text = reply_text.replace('"', '').replace("'", '').strip()
             reply_text = ' '.join(reply_text.split())
-            
-            # Remove prefix jika ada
             if reply_text.startswith('Balas:') or reply_text.startswith('Reply:'):
                 reply_text = reply_text.split(':', 1)[1].strip()
-            
             word_count = count_words(reply_text)
-            
-            logger.debug(f"✅ [Gemini Response] {word_count} kata: '{reply_text}'")
-            
-            # LOOSE VALIDATION - trust Gemini more
-            if 1 <= word_count <= 6 and len(reply_text) < 60:
-                # Language check
-                if not detect_language(reply_text):
-                    logger.warning(f"⚠️  Non-Indonesian detected, retrying...")
-                    stats['ai_errors'] += 1
-                    time.sleep(1)
-                    return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
-                
+            logger.debug(f"Gemini returned ({word_count} words): {reply_text}")
+            # Validate Indonesian & length
+            if not detect_language(reply_text):
+                logger.warning("Gemini returned non-Indonesian text — retrying with AI")
+                stats['ai_errors'] += 1
+                time.sleep(1)
+                return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
+            if 1 <= word_count <= 12 and len(reply_text) < 140:
                 logger.info(f"✅ [GEMINI] {sender_name}: '{reply_text}'")
-                return reply_text, False, "GEMINI"
+                return reply_text, False, 'GEMINI'
             else:
-                logger.warning(f"⚠️  Word count {word_count} invalid, retrying...")
+                logger.warning(f"Gemini output length invalid (words={word_count}) — retrying")
                 stats['ai_errors'] += 1
                 time.sleep(1)
                 return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
         else:
-            logger.warning(f"⚠️  Empty response from Gemini")
+            logger.warning("Empty response from Gemini — retrying")
             stats['ai_errors'] += 1
             time.sleep(1)
             return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
-    
+
     except Exception as e:
         error_msg = str(e)
-        logger.warning(f"⚠️  [Attempt {retry+1}] Gemini error: {error_msg[:100]}")
-        
-        # Retry untuk transient errors
-        if any(x in error_msg for x in ['500', '503', 'timeout', 'Timeout', 'DEADLINE', 'temporarily']):
-            logger.info(f"   Transient error, retrying...")
+        logger.warning(f"Gemini error (attempt {retry+1}): {error_msg[:120]}")
+        if any(x in error_msg.lower() for x in ['500', '503', 'timeout', 'deadline', 'temporarily', 'rate limit', 'unauth']):
             stats['ai_errors'] += 1
-            time.sleep(2 + retry)  # Exponential backoff
+            time.sleep(2 + retry)
             return generate_ai_response(sender_name, user_text, context_messages, retry + 1)
-        
-        # Give up after retries
-        logger.error(f"❌ Gemini completely failed: {error_msg[:100]}")
+        logger.error(f"Gemini failed: {error_msg[:200]}")
         stats['errors'] += 1
-    
-    # FINAL FALLBACK - Emergency only
-    logger.warning(f"🚨 Gemini unavailable, using fallback DB")
-    fallback = random.choice(FALLBACK_RESPONSES)
-    return fallback, True, "FALLBACK"
+
+    # final fallback
+    logger.warning("Using fallback pool due to Gemini failure")
+    fallback, cat = select_fallback_for(user_text, context_messages)
+    return fallback, True, f"FALLBACK:{cat}"
 
 # ==================== MESSAGE HANDLING ====================
 
 @client.on(events.NewMessage(chats=TARGET_GROUP))
 async def handle_message(event):
-    """Handle incoming messages - STRICT FILTERING"""
     global message_queue, last_activity, is_processing, last_cycle_time
-    
     try:
         if getattr(event.message, 'out', False):
             return
-        
         topic_id = get_message_topic_id(event.message)
         if topic_id != TOPIC_ID:
             logger.debug(f"Skipped: Wrong topic {topic_id} (should be {TOPIC_ID})")
             stats['messages_skipped'] += 1
             return
-        
         sender = await event.get_sender()
         if not sender or sender.bot:
             stats['messages_skipped'] += 1
             return
-        
-        sender_name = sender.first_name or "Unknown"
+        sender_name = sender.first_name or 'Unknown'
         user_text = event.message.text or ''
-        
         if not user_text or len(user_text.strip()) < 3:
             stats['messages_skipped'] += 1
             return
-        
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        timestamp = datetime.now().strftime('%H:%M:%S')
         print(f"{C.YELLOW}[{timestamp}] {C.BOLD}{sender_name}{C.RESET}: {user_text}")
-        
         if not detect_language(user_text):
             print(f"   {C.RED}└─ 🚫 Skip (non-Indonesian){C.RESET}")
             logger.info(f"Skipped non-Indonesian from {sender_name}")
             stats['messages_skipped'] += 1
             return
-        
         if should_skip_keywords(user_text):
             print(f"   {C.CYAN}└─ ⏭️  Skip (keyword filter){C.RESET}")
             stats['messages_skipped'] += 1
             return
-        
         stats['messages_received'] += 1
         last_activity = datetime.now()
-        
         message_queue.append({
             'sender_id': sender.id,
             'sender_name': sender_name,
@@ -397,16 +510,12 @@ async def handle_message(event):
             'event': event,
             'timestamp': datetime.now()
         })
-        
         queue_size = len(message_queue)
         print(f"   {C.MAGENTA}└─ 📦 Queue: {queue_size}/3 (Topic: #{TOPIC_ID}){C.RESET}")
-        
         current_time = datetime.now()
         time_since_last_cycle = (current_time - last_cycle_time).total_seconds()
-        
         if queue_size >= 3 and not is_processing and time_since_last_cycle > 5:
             asyncio.create_task(start_reply_cycle())
-    
     except Exception as e:
         logger.error(f"Error handling message: {e}")
         stats['errors'] += 1
@@ -414,57 +523,37 @@ async def handle_message(event):
 # ==================== REPLY CYCLE LOGIC ====================
 
 async def start_reply_cycle():
-    """Start 3-message reply cycle - GEMINI FOCUS"""
     global is_processing, message_queue, last_activity, last_cycle_time
-    
     if is_processing or len(message_queue) < 3:
         return
-    
     is_processing = True
     last_cycle_time = datetime.now()
-    
     try:
         selected = message_queue[:3]
-        
         print(f"\n{C.BOLD}{C.BLUE}{'='*80}{C.RESET}")
         print(f"{C.BOLD}🤖 CYCLE: Balas 3 Messages (GEMINI AI)🇮🇩{C.RESET}")
         print(f"{C.BOLD}{C.BLUE}{'='*80}{C.RESET}\n")
-        
-        # Build context
         context_for_ai = []
         for msg in message_queue:
-            context_for_ai.append({
-                'sender': msg['sender_name'],
-                'text': msg['text']
-            })
-        
+            context_for_ai.append({'sender': msg['sender_name'], 'text': msg['text']})
         for idx, msg in enumerate(selected, 1):
             if should_exit:
                 print(f"{C.YELLOW}[EXIT] Stopping cycle...{C.RESET}")
                 break
-            
             sender_name = msg['sender_name']
             user_text = msg['text']
             event = msg['event']
-            
             try:
-                # 🤖 GEMINI AI GENERATION
                 reply_text, is_fallback, source = generate_ai_response(
                     sender_name, user_text, context_for_ai
                 )
-                
-                # Update stats
                 if not is_fallback:
                     stats['ai_replies'] += 1
                 else:
                     stats['fallback_replies'] += 1
-                
                 delay = random.randint(DELAY_MIN, DELAY_MAX)
-                source_emoji = "🤖" if source == "GEMINI" else "📚"
-                
+                source_emoji = '🤖' if source == 'GEMINI' else '📚'
                 print(f"   {C.CYAN}└─ {source_emoji}[{source}] Reply (delay {delay}s){C.RESET}")
-                
-                # Typing animation
                 try:
                     async with client.action(TARGET_GROUP, 'typing'):
                         for _ in range(delay):
@@ -476,8 +565,6 @@ async def start_reply_cycle():
                         if should_exit:
                             break
                         await asyncio.sleep(1)
-                
-                # Send message
                 if not should_exit:
                     try:
                         await event.reply(reply_text)
@@ -488,45 +575,34 @@ async def start_reply_cycle():
                         except Exception as fallback_error:
                             logger.error(f"Send failed: {fallback_error}")
                             raise
-                    
                     print(f"   {C.GREEN}└─ ✅ Sent: {reply_text}{C.RESET}")
                     stats['messages_replied'] += 1
                     last_activity = datetime.now()
                     logger.info(f"[{source}] Balas ke {sender_name}: {reply_text}")
-            
             except Exception as e:
                 logger.error(f"Error replying to {sender_name}: {e}")
                 stats['errors'] += 1
                 continue
-        
         if should_exit:
             return
-        
-        # Remove processed messages
         for msg in selected:
             if msg in message_queue:
                 message_queue.remove(msg)
-        
         print(f"\n{C.BOLD}{C.BLUE}{'='*80}{C.RESET}")
         print(f"{C.GREEN}✅ CYCLE COMPLETE{C.RESET}")
         print(f"{C.BOLD}{C.BLUE}{'='*80}{C.RESET}\n")
-        
         stats['cycles_completed'] += 1
-        
         rest_duration = random.randint(REST_MIN, REST_MAX)
         minutes = rest_duration // 60
         seconds = rest_duration % 60
         print(f"{C.YELLOW}⏸️  REST {minutes}m {seconds}s (Ctrl+C exit){C.RESET}")
-        
         for _ in range(rest_duration):
             if should_exit:
                 print(f"{C.YELLOW}[EXIT] Rest interrupted{C.RESET}\n")
                 break
             await asyncio.sleep(1)
-        
         if not should_exit:
             print(f"{C.GREEN}🌅 WOKE UP{C.RESET}\n")
-            
             if len(message_queue) >= 3:
                 print(f"{C.CYAN}Queue ada, cycle baru...{C.RESET}")
                 await start_reply_cycle()
@@ -535,27 +611,38 @@ async def start_reply_cycle():
                 if time_silent > SILENCE:
                     print(f"{C.YELLOW}[SMART OPEN] Sepi {int(time_silent)}s, buka chat...{C.RESET}")
                     await smart_open()
-    
     except Exception as e:
         logger.error(f"Error in reply cycle: {e}")
         stats['errors'] += 1
-    
     finally:
         is_processing = False
 
 # ==================== SMART OPENING ====================
 
 async def smart_open():
-    """Send opening message"""
     try:
         if should_exit:
             return
-        
-        opening = random.choice(FALLBACK_RESPONSES[36:44])  # Opening messages
+        # pick an opening based on recent conversation keywords
+        opening = None
+        if len(message_queue) >= 1:
+            # look at last up to 3 messages
+            ctx = message_queue[-3:]
+            words = ' '.join(m['text'] for m in ctx).lower().split()
+            # choose a word that is non-stop and common
+            common = Counter([w for w in words if len(w) > 2])
+            if common:
+                keyword = common.most_common(1)[0][0]
+                # prefer opening that contains keyword
+                candidates = [p for p in all_fallbacks if keyword in p]
+                if candidates:
+                    opening = random.choice(candidates)
+        if not opening:
+            opening, cat = select_fallback_for('opening')
+        # send opening
         await client.send_message(TARGET_GROUP, opening, reply_to=TOPIC_ID)
         print(f"{C.GREEN}📢 [SELF-CHAT] {opening}{C.RESET}\n")
         logger.info(f"[SELF-CHAT] Sent: {opening}")
-        
         global last_activity
         last_activity = datetime.now()
         stats['self_chats'] += 1
@@ -563,24 +650,19 @@ async def smart_open():
         logger.error(f"Self chat failed: {e}")
 
 async def smart_opening_task():
-    """Background task untuk monitor"""
     while not should_exit:
         try:
             for _ in range(2):
                 if should_exit:
                     break
                 await asyncio.sleep(1)
-            
             if should_exit:
                 break
-            
             if len(message_queue) >= 3 and not is_processing:
                 asyncio.create_task(start_reply_cycle())
-            
             time_silent = (datetime.now() - last_activity).total_seconds()
             if time_silent > SILENCE and not is_processing and len(message_queue) == 0:
                 asyncio.create_task(smart_open())
-        
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -589,7 +671,6 @@ async def smart_opening_task():
 # ==================== SIGNAL HANDLING ====================
 
 def signal_handler(signum, frame):
-    """Handle Ctrl+C"""
     global should_exit
     logger.warning(f"Signal {signum} - instant shutdown...")
     print(f"\n{C.RED}🛑 INSTANT EXIT{C.RESET}\n")
@@ -599,47 +680,34 @@ def signal_handler(signum, frame):
 # ==================== MAIN ====================
 
 async def main():
-    """Main bot function"""
     print_banner()
-    
     errors = validate_config()
     if errors:
         print(f"{C.RED}❌ CONFIG ERRORS:{C.RESET}")
         for e in errors:
             print(f"   {C.RED}✗ {e}{C.RESET}")
         sys.exit(1)
-    
-    logger.info("="*80)
+
+    # load/generate fallback pool
+    load_or_create_fallback()
+
     logger.info("BOT STARTING - PRIORITAS GEMINI AI")
     logger.info(f"Target: {TARGET_GROUP} | Topic: #{TOPIC_ID}")
     logger.info("Model: Gemini 3.1 Flash-Lite (PRIMARY)")
-    logger.info("Fallback: Database (EMERGENCY ONLY)")
-    logger.info("="*80)
-    
+    logger.info("Fallback: Generated pool (EMERGENCY ONLY)")
+
     try:
         print(f"{C.GREEN}🔌 Connecting to Telegram...{C.RESET}")
         await client.start()
-        
         logger.info("✅ Connected successfully!")
         print(f"{C.GREEN}✅ USERBOT ACTIVE - GEMINI AI MODE 🤖🇮🇩{C.RESET}\n")
-        print(f"{C.CYAN}PRIORITY: Gemini AI 🤖 (100%){C.RESET}")
-        print(f"{C.CYAN}FALLBACK: Database 📚 (EMERGENCY){C.RESET}")
-        print(f"{C.CYAN}LOGIC: Tunggu 3 chat → Gemini response → Rest{C.RESET}")
-        print(f"{C.CYAN}FILTER: Topic #{TOPIC_ID} • Indonesia Only{C.RESET}")
-        print(f"{C.CYAN}SELF-CHAT: Auto jika sepi 60+ detik{C.RESET}")
-        print(f"{C.CYAN}Press Ctrl+C to shutdown{C.RESET}\n")
-        
         smart_task = asyncio.create_task(smart_opening_task())
-        
         await client.run_until_disconnected()
-    
     except KeyboardInterrupt:
         logger.warning("Interrupted by user")
-    
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         print(f"{C.RED}❌ Error: {e}{C.RESET}")
-    
     finally:
         print_stats()
         logger.info("Bot shutdown")
@@ -650,7 +718,6 @@ async def main():
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
     try:
         with client:
             client.loop.run_until_complete(main())
